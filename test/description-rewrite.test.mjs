@@ -15,6 +15,7 @@
 import { describe, it, expect } from "vite-plus/test";
 
 import { renameToolsInDescriptions, underscoreToolNames } from "../host.js";
+import { underscoreToolNames as underscoreFromCore } from "../session-core.js";
 
 // ============================================================================
 // [A] The session-start bug: an object under a `description` key
@@ -214,5 +215,35 @@ describe("[F] underscoreToolNames", () => {
   it("null and undefined become the empty string", () => {
     expect(underscoreToolNames(null)).toBe("");
     expect(underscoreToolNames(undefined)).toBe("");
+  });
+});
+
+// ============================================================================
+// [G] session-core is the single source of truth for the rewrite
+// ============================================================================
+describe("[G] session-core:underscoreToolNames is the one implementation", () => {
+  it("host re-exports the very same function object (no second copy)", () => {
+    expect(underscoreToolNames).toBe(underscoreFromCore);
+  });
+
+  it("null and undefined become the empty string", () => {
+    expect(underscoreFromCore(null)).toBe("");
+    expect(underscoreFromCore(undefined)).toBe("");
+  });
+
+  it("a second segment may start with an underscore", () => {
+    expect(underscoreFromCore("memory._private_tool")).toBe("memory__private_tool");
+  });
+
+  it("a trailing word boundary leaves names glued to uppercase text alone", () => {
+    // Without the trailing \b the old core regex matched "memory.foo" inside
+    // "memory.fooBar" and produced "memory_fooBar".
+    expect(underscoreFromCore("memory.fooBar")).toBe("memory.fooBar");
+  });
+
+  it("rewrites dotted memory/project names to underscored", () => {
+    expect(underscoreFromCore("call memory.save now")).toBe("call memory_save now");
+    expect(underscoreFromCore("memory.session_start")).toBe("memory_session_start");
+    expect(underscoreFromCore("project.bind")).toBe("project_bind");
   });
 });
