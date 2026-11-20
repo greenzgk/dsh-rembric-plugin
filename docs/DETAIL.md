@@ -10,8 +10,11 @@ project-resolution rules, adapted to how DSH bundles and services work.
 - **Discovers the whole Rembric tool set once** from the server's MCP endpoint and
   registers every tool on each agent under a provider-safe underscored name
   (`memory.save` → `memory_save`, `project.current` → `project_current`, …). The
-  tool descriptions and every `description` field inside each input schema are
-  rewritten so the model only ever sees the underscored names.
+  tool descriptions and the string `description` values inside each input
+  schema are rewritten to the underscored names; non-string schema content —
+  including a parameter literally named `description` (as in
+  `memory_session_start`) — is never coerced to a string, though the walk
+  continues inside it and rewrites any nested string descriptions.
 - **Forwards the server's usage crib-sheet** (the instructions Rembric returns at
   MCP `initialize`) into the system prompt, so the agent knows when to recall,
   what to save, and how to summarize — without you writing any of that.
