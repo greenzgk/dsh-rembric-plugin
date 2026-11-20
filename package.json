@@ -26,6 +26,13 @@
   "engines": {
     "node": ">=22"
   },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "24.22.1",
+      "onFail": "download"
+    }
+  },
   "exports": {
     ".": "./host.js",
     "./package.json": "./package.json"
@@ -47,5 +54,11 @@
     "docs/DETAIL.md",
     "LICENSE",
     "package.json"
-  ]
+  ],
+  "devDependencies": {
+    "vite-plus": "catalog:"
+  },
+  "scripts": {
+    "prepare": "vp config"
+  }
 }
