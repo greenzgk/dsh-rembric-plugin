@@ -13,7 +13,8 @@ project-resolution rules, adapted to how DSH bundles and services work.
   tool descriptions and the string `description` values inside each input
   schema are rewritten to the underscored names; non-string schema content —
   including a parameter literally named `description` (as in
-  `memory_session_start`) — passes through untouched.
+  `memory_session_start`) — is never coerced to a string, though the walk
+  continues inside it and rewrites any nested string descriptions.
 - **Forwards the server's usage crib-sheet** (the instructions Rembric returns at
   MCP `initialize`) into the system prompt, so the agent knows when to recall,
   what to save, and how to summarize — without you writing any of that.
