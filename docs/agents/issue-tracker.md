@@ -15,7 +15,7 @@ Infer the repo from `git remote -v`; `gh` does this automatically when run insid
 
 ## Pull requests as a triage surface
 
-**PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
+**PRs as a request surface: yes.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
 
 When set to `yes`, PRs run through the same labels and states as issues, using the `gh pr` equivalents:
 
@@ -24,6 +24,16 @@ When set to `yes`, PRs run through the same labels and states as issues, using t
 - **Comment / label / close**: `gh pr comment`, `gh pr edit --add-label`/`--remove-label`, `gh pr close`.
 
 GitHub shares one number space across issues and PRs, so a bare `#42` may be either: resolve with `gh pr view 42` and fall back to `gh issue view 42`.
+
+## Branch strategy
+
+Every ticket is worked on a feature branch and lands via a pull request to `main`.
+
+- **Branch per ticket**: create a branch off `main` named for the ticket (e.g. `ticket/<n>-<slug>`) and do all the work there.
+- **Land via PR to `main`**: open a PR from the branch; reference the ticket (`#<n>`) in the title or body.
+- **The human reviews and merges**: agents never merge a PR themselves.
+- **No direct pushes to `main`**: `main` only ever moves by merged PRs.
+- **Mechanical mass-changes stay isolated**: a repo-wide format sweep, a rename, or any other tool-generated bulk edit gets its own commit or PR, never mixed with behavioural changes — so review can focus on the code.
 
 ## When a skill says "publish to the issue tracker"
 
