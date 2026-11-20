@@ -7,9 +7,13 @@
 // This module imports no DSH module and no mcp-client; only Node builtins
 // (child_process, fs/promises, path) are used for the git/file helpers.
 //
-// Nudge strings, regexes, constants, and the returned object shape are
-// byte-identical to core.mjs. `underscoreToolNames` is exported for the host
-// to apply at nudge-delivery time (core.mjs does not apply it internally).
+// Nudge strings, constants, and the returned object shape are byte-identical
+// to core.mjs. `underscoreToolNames` is the single source of truth for the
+// dotted -> underscored rewrite: the host re-exports it and applies it at
+// nudge-delivery and schema-registration time (core.mjs does not apply it
+// internally). Its regex deliberately differs from core.mjs: null-safe input,
+// a second segment that may start with "_", and a trailing word boundary so
+// a name glued to other text (memory.fooBar) is left alone.
 
 import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
@@ -54,10 +58,10 @@ export const POST_COMPACT_NUDGE_CORE =
   "3. Missing detail? memory.context or memory.search.\n" +
   "4. Then continue.";
 
-const DOTTED_TOOL_NAME = /\b(memory|project)\.([a-z][a-z0-9_]*)/g;
+const DOTTED_TOOL_NAME = /\b(memory|project)\.([a-z_][a-z0-9_]*)\b/g;
 
 export function underscoreToolNames(text) {
-  return text.replace(DOTTED_TOOL_NAME, "$1_$2");
+  return String(text ?? "").replace(DOTTED_TOOL_NAME, "$1_$2");
 }
 
 /** Read per use, not once: an override set after this module loads still wins. */
