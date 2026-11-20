@@ -1,0 +1,20 @@
+# Rembric memory — bundle layer.
+#
+# Inserts this plugin's Host row into the profile's layer stack. The row's
+# `config` is passed to apply(ctx, config).
+#
+# serverUrl  : Rembric server base URL. Falls back to REMBRIC_SERVER_URL, then
+#              http://127.0.0.1:8790. Edit here to point at another server.
+# projectSlug: default project for sessions whose working directory has no
+#              .rembric file. Acts like REMBRIC_PROJECT_SLUG (lower precedence
+#              than a .rembric file). Remove it to force per-directory
+#              resolution everywhere.
+#
+# The API token is NOT stored here. Put it in the `rembric/token` credential
+# (preferred) or export REMBRIC_API_TOKEN in the environment that launches DSH.
+- insert:
+    - id: rembric
+      name: 'dsh-rembric-plugin'
+      config:
+        serverUrl: 'http://127.0.0.1:8790'
+        projectSlug: 'dsh-rembric-plugin'

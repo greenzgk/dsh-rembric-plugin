@@ -1,0 +1,51 @@
+{
+  "name": "dsh-rembric-plugin",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Persistent shared memory for your DeepSeek Harness agent, backed by a Rembric server. Discovers the full Rembric tool set, registers it under underscored names, and teaches the agent when to recall and what to save.",
+  "license": "MIT",
+  "icon": "./icon.svg",
+  "meta": {
+    "title": "Rembric Memory",
+    "description": "Long-term memory for the agent via a Rembric server: every Rembric tool is registered (memory_save, memory_search, memory_context, …), the server's usage crib-sheet is added to the system prompt, and the project is chosen from the working directory (.rembric file, env, or git binding). Token comes from the rembric/token credential or REMBRIC_API_TOKEN."
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "rembric",
+    "memory",
+    "mcp",
+    "knowledge"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/susomejias/rembric.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": "./host.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "host.js",
+    "session-core.js",
+    "commands.js",
+    "mcp-client.js",
+    "project.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "docs/DETAIL.md",
+    "LICENSE",
+    "package.json"
+  ]
+}
