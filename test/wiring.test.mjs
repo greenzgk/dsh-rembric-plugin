@@ -1,5 +1,5 @@
-// test/wiring.test.mjs — integration test for the Phase 3 event wiring in
-// commands.js: wireFileRecall + wireSubagentLearnings.
+// test/wiring.test.mjs — Vitest port of the Phase 3 event-wiring integration
+// tests for commands.js: wireFileRecall + wireSubagentLearnings.
 //
 // Read-only w.r.t. plugin sources. Verifies:
 //  [A] wireFileRecall with a SPY core — exact call contract (event name,
@@ -14,30 +14,15 @@
 //  [E] deps contract — every dep field the wire functions read is provided
 //      by host.js's phase3 object (host.js:435-441).
 
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { createSessionCore } from '../session-core.js';
-import { wireFileRecall, wireSubagentLearnings } from '../commands.js';
+import { describe, it, expect, beforeAll } from "vite-plus/test";
 
-// ---- tiny assert harness -----------------------------------------------------
-
-let passed = 0;
-let failed = 0;
-const failures = [];
-
-function assert(cond, msg) {
-  if (cond) {
-    passed += 1;
-    console.log(`  PASS  ${msg}`);
-  } else {
-    failed += 1;
-    failures.push(msg);
-    console.log(`  FAIL  ${msg}`);
-  }
-}
+import { createSessionCore } from "../session-core.js";
+import { wireFileRecall, wireSubagentLearnings } from "../commands.js";
 
 const settle = (ms = 60) => new Promise((r) => setTimeout(r, ms));
 async function waitFor(fn, ms = 3000) {
@@ -59,7 +44,10 @@ function makeFakeCtx() {
       if (!handlers.has(name)) handlers.set(name, []);
       handlers.get(name).push(fn);
       return () =>
-        handlers.set(name, (handlers.get(name) ?? []).filter((f) => f !== fn));
+        handlers.set(
+          name,
+          (handlers.get(name) ?? []).filter((f) => f !== fn),
+        );
     },
     emit(name, ...args) {
       for (const fn of [...(handlers.get(name) ?? [])]) fn(...args);
@@ -70,11 +58,11 @@ function makeFakeCtx() {
 // ---- fake deps with access-recording Proxy ------------------------------------
 // host.js apply() builds phase3 with exactly these five fields (host.js:435-441):
 const HOST_PROVIDES = [
-  'getStateForAgent',
-  'getStateBySession',
-  'makeNudgeMessage',
-  'resolveToolName',
-  'warnOnce',
+  "getStateForAgent",
+  "getStateBySession",
+  "makeNudgeMessage",
+  "resolveToolName",
+  "warnOnce",
 ];
 
 function makeDeps(fields) {
@@ -83,7 +71,7 @@ function makeDeps(fields) {
     {},
     {
       get(_target, key) {
-        if (typeof key === 'string') accessed.add(key);
+        if (typeof key === "string") accessed.add(key);
         return fields[key];
       },
     },
@@ -111,413 +99,437 @@ function makeFakePost(handler) {
   return { post, log };
 }
 
+// Captured by sections A and C for the deps-contract check in section E.
+let fileRecallDepsRead = new Set();
+let learningsDepsRead = new Set();
+
 // ============================================================================
 // [A] wireFileRecall — spy core: exact wiring contract
 // ============================================================================
-console.log('\n[A] wireFileRecall — spy core (wiring contract)');
-{
-  const ctx = makeFakeCtx();
-  const calls = { fileRecall: [] };
-  const nudges = [];
-  const injected = [];
-  const spyCore = {
-    fileRecall: (...a) => {
-      calls.fileRecall.push(a);
-      return Promise.resolve(['hint A', 'hint B']);
-    },
-  };
-  const state = {
-    core: spyCore,
-    cwd: '/repo',
-    sid: 's1',
-    agent: { inject: (m) => injected.push(m) },
-  };
-  const deps = makeDeps({
-    getStateBySession: (id) => (id === 's1' ? state : undefined),
-    makeNudgeMessage: (line) => {
-      nudges.push(line);
-      return { __nudge: line };
-    },
+describe("[A] wireFileRecall — spy core (wiring contract)", () => {
+  let ctx;
+  let calls;
+  let nudges;
+  let injected;
+  let deps;
+
+  beforeAll(() => {
+    ctx = makeFakeCtx();
+    calls = { fileRecall: [] };
+    nudges = [];
+    injected = [];
+    const spyCore = {
+      fileRecall: (...a) => {
+        calls.fileRecall.push(a);
+        return Promise.resolve(["hint A", "hint B"]);
+      },
+    };
+    const state = {
+      core: spyCore,
+      cwd: "/repo",
+      sid: "s1",
+      agent: { inject: (m) => injected.push(m) },
+    };
+    deps = makeDeps({
+      getStateBySession: (id) => (id === "s1" ? state : undefined),
+      makeNudgeMessage: (line) => {
+        nudges.push(line);
+        return { __nudge: line };
+      },
+    });
+    wireFileRecall(ctx, deps.proxy);
   });
-  wireFileRecall(ctx, deps.proxy);
 
-  assert(
-    ctx.handlers.has('session/event'),
-    'subscribes to event "session/event" (no other event)',
-  );
-  assert(
-    ctx.handlers.size === 1 && [...ctx.handlers.keys()][0] === 'session/event',
-    `only "session/event" subscribed (got: ${[...ctx.handlers.keys()].join(', ')})`,
-  );
+  it('subscribes to "session/event" and nothing else', () => {
+    expect(ctx.handlers.has("session/event")).toBe(true);
+    expect([...ctx.handlers.keys()]).toEqual(["session/event"]);
+  });
 
-  // A1: read tool with JSON-string args carrying file_path
-  ctx.emit(
-    'session/event',
-    { id: 's1' },
-    {
-      type: 'tool/call',
-      data: { name: 'read', arguments: JSON.stringify({ file_path: '/some/path/file.ts' }) },
-    },
-  );
-  await waitFor(() => calls.fileRecall.length >= 1);
-  assert(calls.fileRecall.length === 1, 'read tool/call triggers exactly one core.fileRecall');
-  const [sidArg, cwdArg, candArg] = calls.fileRecall[0] ?? [];
-  assert(sidArg === 's1', `core.fileRecall arg1 = session id "s1" (got ${JSON.stringify(sidArg)})`);
-  assert(cwdArg === '/repo', `core.fileRecall arg2 = state.cwd "/repo" (got ${JSON.stringify(cwdArg)})`);
-  assert(
-    Array.isArray(candArg) && candArg.length === 1 && candArg[0] === '/some/path/file.ts',
-    `core.fileRecall arg3 = candidate paths ["/some/path/file.ts"] (got ${JSON.stringify(candArg)})`,
-  );
+  it("A1: read tool/call triggers exactly one core.fileRecall", async () => {
+    ctx.emit(
+      "session/event",
+      { id: "s1" },
+      {
+        type: "tool/call",
+        data: { name: "read", arguments: JSON.stringify({ file_path: "/some/path/file.ts" }) },
+      },
+    );
+    await waitFor(() => calls.fileRecall.length >= 1);
+    expect(calls.fileRecall.length).toBe(1);
+  });
 
-  // A2: recall lines are nudged through deps.makeNudgeMessage into agent.inject
-  await waitFor(() => injected.length >= 2);
-  assert(
-    nudges.length === 2 && nudges[0] === 'hint A' && nudges[1] === 'hint B',
-    'deps.makeNudgeMessage called once per recall line',
-  );
-  assert(
-    injected.length === 2 && injected[0]?.__nudge === 'hint A' && injected[1]?.__nudge === 'hint B',
-    'agent.inject received exactly the objects deps.makeNudgeMessage returned',
-  );
+  it("A1: core.fileRecall receives session id, cwd, and candidate paths", () => {
+    const [sidArg, cwdArg, candArg] = calls.fileRecall[0] ?? [];
+    expect(sidArg).toBe("s1");
+    expect(cwdArg).toBe("/repo");
+    expect(candArg).toEqual(["/some/path/file.ts"]);
+  });
 
-  // A3: non-file tool is ignored
-  ctx.emit(
-    'session/event',
-    { id: 's1' },
-    { type: 'tool/call', data: { name: 'web_search', arguments: '{}' } },
-  );
-  await settle(80);
-  assert(calls.fileRecall.length === 1, 'non-file tool (web_search) triggers no fileRecall');
+  it("A2: recall lines are nudged through deps.makeNudgeMessage into agent.inject", async () => {
+    await waitFor(() => injected.length >= 2);
+    expect(nudges).toEqual(["hint A", "hint B"]);
+    expect(injected.map((m) => m?.__nudge)).toEqual(["hint A", "hint B"]);
+  });
 
-  // A4: other event types are ignored
-  ctx.emit(
-    'session/event',
-    { id: 's1' },
-    { type: 'assistant/message', data: { message: { content: [] } } },
-  );
-  await settle(80);
-  assert(calls.fileRecall.length === 1, 'event type other than tool/call triggers no fileRecall');
+  it("A3: non-file tool (web_search) triggers no fileRecall", async () => {
+    ctx.emit(
+      "session/event",
+      { id: "s1" },
+      { type: "tool/call", data: { name: "web_search", arguments: "{}" } },
+    );
+    await settle(80);
+    expect(calls.fileRecall.length).toBe(1);
+  });
 
-  // A5: namespaced tool name (builtin.read) still matches
-  ctx.emit(
-    'session/event',
-    { id: 's1' },
-    {
-      type: 'tool/call',
-      data: { name: 'builtin.read', arguments: JSON.stringify({ path: '/x/y/z.ts' }) },
-    },
-  );
-  await waitFor(() => calls.fileRecall.length >= 2);
-  assert(
-    calls.fileRecall.length === 2 && calls.fileRecall[1][2][0] === '/x/y/z.ts',
-    'namespaced tool name "builtin.read" matches and extracts args.path',
-  );
+  it("A4: event type other than tool/call triggers no fileRecall", async () => {
+    ctx.emit(
+      "session/event",
+      { id: "s1" },
+      { type: "assistant/message", data: { message: { content: [] } } },
+    );
+    await settle(80);
+    expect(calls.fileRecall.length).toBe(1);
+  });
 
-  // A6: shell tool extracts paths from the command string
-  ctx.emit(
-    'session/event',
-    { id: 's1' },
-    {
-      type: 'tool/call',
-      data: { name: 'bash', arguments: JSON.stringify({ command: 'cat /some/path/file.ts | wc -l' }) },
-    },
-  );
-  await waitFor(() => calls.fileRecall.length >= 3);
-  assert(
-    calls.fileRecall.length === 3 && calls.fileRecall[2][2][0] === '/some/path/file.ts',
-    'bash tool/call extracts the absolute path from args.command',
-  );
+  it('A5: namespaced tool name "builtin.read" matches and extracts args.path', async () => {
+    ctx.emit(
+      "session/event",
+      { id: "s1" },
+      {
+        type: "tool/call",
+        data: { name: "builtin.read", arguments: JSON.stringify({ path: "/x/y/z.ts" }) },
+      },
+    );
+    await waitFor(() => calls.fileRecall.length >= 2);
+    expect(calls.fileRecall.length).toBe(2);
+    expect(calls.fileRecall[1][2][0]).toBe("/x/y/z.ts");
+  });
 
-  // A7: unknown session -> no call, no throw
-  ctx.emit(
-    'session/event',
-    { id: 'unknown' },
-    { type: 'tool/call', data: { name: 'read', arguments: '{"file_path":"/a/b.ts"}' } },
-  );
-  await settle(80);
-  assert(calls.fileRecall.length === 3, 'tool/call for an unmapped session triggers no fileRecall');
+  it("A6: bash tool/call extracts the absolute path from args.command", async () => {
+    ctx.emit(
+      "session/event",
+      { id: "s1" },
+      {
+        type: "tool/call",
+        data: {
+          name: "bash",
+          arguments: JSON.stringify({ command: "cat /some/path/file.ts | wc -l" }),
+        },
+      },
+    );
+    await waitFor(() => calls.fileRecall.length >= 3);
+    expect(calls.fileRecall.length).toBe(3);
+    expect(calls.fileRecall[2][2][0]).toBe("/some/path/file.ts");
+  });
 
-  // A8: deps actually read by this wire function
-  assert(
-    deps.accessed.has('getStateBySession') && deps.accessed.has('makeNudgeMessage'),
-    `wireFileRecall reads deps.getStateBySession + deps.makeNudgeMessage (read: ${[...deps.accessed].join(', ')})`,
-  );
-  var fileRecallDepsRead = new Set(deps.accessed);
-}
+  it("A7: tool/call for an unmapped session triggers no fileRecall", async () => {
+    ctx.emit(
+      "session/event",
+      { id: "unknown" },
+      { type: "tool/call", data: { name: "read", arguments: '{"file_path":"/a/b.ts"}' } },
+    );
+    await settle(80);
+    expect(calls.fileRecall.length).toBe(3);
+  });
+
+  it("A8: wireFileRecall reads deps.getStateBySession + deps.makeNudgeMessage", () => {
+    expect(deps.accessed.has("getStateBySession")).toBe(true);
+    expect(deps.accessed.has("makeNudgeMessage")).toBe(true);
+    fileRecallDepsRead = new Set(deps.accessed);
+  });
+});
 
 // ============================================================================
 // [B] wireFileRecall — REAL createSessionCore + fake transport + temp git repo
 // ============================================================================
-console.log('\n[B] wireFileRecall — real core + fake transport + real git repo (real gating)');
-{
-  const repo = mkdtempSync(join(tmpdir(), 'rembric-wire-'));
-  mkdirSync(join(repo, 'src'));
-  writeFileSync(join(repo, 'src', 'widget.ts'), 'export const widget = 1;\n');
-  const git = (...args) =>
-    execFileSync(
-      'git',
-      ['-C', repo, '-c', 'user.email=wiring@test.local', '-c', 'user.name=wiring-test', ...args],
-      { stdio: 'pipe' },
+describe("[B] wireFileRecall — real core + fake transport + real git repo (real gating)", () => {
+  let repo;
+  let log;
+  let core;
+  let injected;
+  let ctx;
+
+  beforeAll(async () => {
+    repo = mkdtempSync(join(tmpdir(), "rembric-wire-"));
+    mkdirSync(join(repo, "src"));
+    writeFileSync(join(repo, "src", "widget.ts"), "export const widget = 1;\n");
+    const git = (...args) =>
+      execFileSync(
+        "git",
+        ["-C", repo, "-c", "user.email=wiring@test.local", "-c", "user.name=wiring-test", ...args],
+        { stdio: "pipe" },
+      );
+    git("init", "-q");
+    git("add", ".");
+    git("commit", "-q", "-m", "fixture");
+
+    const { post, log: postLog } = makeFakePost((path) => {
+      if (path.endsWith("/file-recall")) return fakeResponse({ lines: ["recall hint for widget"] });
+      if (path === "/api/demo/sessions") return fakeResponse({ created: true });
+      return fakeResponse({});
+    });
+    log = postLog;
+    core = createSessionCore({
+      agent: "rembric-dsh",
+      baseUrl: "http://127.0.0.1:1",
+      apiToken: "tok",
+      slug: "demo",
+      cwd: repo,
+      post,
+    });
+    await core.ensureSession("s2");
+
+    injected = [];
+    ctx = makeFakeCtx();
+    const state = { core, cwd: repo, sid: "s2", agent: { inject: (m) => injected.push(m) } };
+    const deps = makeDeps({
+      getStateBySession: (id) => (id === "s2" ? state : undefined),
+      makeNudgeMessage: (line) => ({ __nudge: line }),
+    });
+    wireFileRecall(ctx, deps.proxy);
+  });
+
+  it("real core is enabled (baseUrl + apiToken + slug present)", () => {
+    expect(core.disabled).toBe(false);
+  });
+
+  it("tracked file triggers real POST /api/demo/sessions/s2/file-recall", async () => {
+    ctx.emit(
+      "session/event",
+      { id: "s2" },
+      {
+        type: "tool/call",
+        data: {
+          name: "read",
+          arguments: JSON.stringify({ file_path: join(repo, "src", "widget.ts") }),
+        },
+      },
     );
-  git('init', '-q');
-  git('add', '.');
-  git('commit', '-q', '-m', 'fixture');
-
-  const { post, log } = makeFakePost((path) => {
-    if (path.endsWith('/file-recall')) return fakeResponse({ lines: ['recall hint for widget'] });
-    if (path === '/api/demo/sessions') return fakeResponse({ created: true });
-    return fakeResponse({});
+    const gotPost = await waitFor(() =>
+      log.some((e) => e.path === "/api/demo/sessions/s2/file-recall"),
+    );
+    expect(gotPost).toBe(true);
   });
-  const core = createSessionCore({
-    agent: 'rembric-dsh',
-    baseUrl: 'http://127.0.0.1:1',
-    apiToken: 'tok',
-    slug: 'demo',
-    cwd: repo,
-    post,
+
+  it("file-recall body.path is repo-relative", () => {
+    const fr = log.find((e) => e.path === "/api/demo/sessions/s2/file-recall");
+    expect(fr?.body?.path).toBe("src/widget.ts");
   });
-  assert(core.disabled === false, 'real core is enabled (baseUrl + apiToken + slug present)');
-  await core.ensureSession('s2');
 
-  const injected = [];
-  const state = { core, cwd: repo, sid: 's2', agent: { inject: (m) => injected.push(m) } };
-  const ctx = makeFakeCtx();
-  const deps = makeDeps({
-    getStateBySession: (id) => (id === 's2' ? state : undefined),
-    makeNudgeMessage: (line) => ({ __nudge: line }),
+  it("server recall line reaches agent.inject via deps.makeNudgeMessage", async () => {
+    await waitFor(() => injected.length >= 1);
+    expect(injected[0]?.__nudge).toBe("recall hint for widget");
   });
-  wireFileRecall(ctx, deps.proxy);
 
-  ctx.emit(
-    'session/event',
-    { id: 's2' },
-    {
-      type: 'tool/call',
-      data: { name: 'read', arguments: JSON.stringify({ file_path: join(repo, 'src', 'widget.ts') }) },
-    },
-  );
-  const gotPost = await waitFor(
-    () => log.some((e) => e.path === '/api/demo/sessions/s2/file-recall'),
-  );
-  assert(gotPost, 'tracked file triggers real POST /api/demo/sessions/s2/file-recall');
-  const fr = log.find((e) => e.path === '/api/demo/sessions/s2/file-recall');
-  assert(
-    fr?.body?.path === 'src/widget.ts',
-    `file-recall body.path is repo-relative "src/widget.ts" (got ${JSON.stringify(fr?.body?.path)})`,
-  );
-  await waitFor(() => injected.length >= 1);
-  assert(
-    injected[0]?.__nudge === 'recall hint for widget',
-    'server recall line reaches agent.inject via deps.makeNudgeMessage',
-  );
+  it("second touch of the same path is de-duplicated by the core (no extra POST)", async () => {
+    const before = log.filter((e) => e.path.endsWith("/file-recall")).length;
+    ctx.emit(
+      "session/event",
+      { id: "s2" },
+      {
+        type: "tool/call",
+        data: {
+          name: "read",
+          arguments: JSON.stringify({ file_path: join(repo, "src", "widget.ts") }),
+        },
+      },
+    );
+    await settle(200);
+    expect(log.filter((e) => e.path.endsWith("/file-recall")).length).toBe(before);
+  });
 
-  // dedup: same path again must not re-POST
-  const before = log.filter((e) => e.path.endsWith('/file-recall')).length;
-  ctx.emit(
-    'session/event',
-    { id: 's2' },
-    {
-      type: 'tool/call',
-      data: { name: 'read', arguments: JSON.stringify({ file_path: join(repo, 'src', 'widget.ts') }) },
-    },
-  );
-  await settle(200);
-  assert(
-    log.filter((e) => e.path.endsWith('/file-recall')).length === before,
-    'second touch of the same path is de-duplicated by the core (no extra POST)',
-  );
-
-  // untracked file must not POST
-  writeFileSync(join(repo, 'src', 'ghost.ts'), 'untracked\n');
-  ctx.emit(
-    'session/event',
-    { id: 's2' },
-    {
-      type: 'tool/call',
-      data: { name: 'read', arguments: JSON.stringify({ file_path: join(repo, 'src', 'ghost.ts') }) },
-    },
-  );
-  await settle(200);
-  assert(
-    log.filter((e) => e.path.endsWith('/file-recall')).length === before,
-    'untracked file is skipped by trackedRepoPath (no POST)',
-  );
-}
+  it("untracked file is skipped by trackedRepoPath (no POST)", async () => {
+    const before = log.filter((e) => e.path.endsWith("/file-recall")).length;
+    writeFileSync(join(repo, "src", "ghost.ts"), "untracked\n");
+    ctx.emit(
+      "session/event",
+      { id: "s2" },
+      {
+        type: "tool/call",
+        data: {
+          name: "read",
+          arguments: JSON.stringify({ file_path: join(repo, "src", "ghost.ts") }),
+        },
+      },
+    );
+    await settle(200);
+    expect(log.filter((e) => e.path.endsWith("/file-recall")).length).toBe(before);
+  });
+});
 
 // ============================================================================
 // [C] wireSubagentLearnings — spy core: wiring contract
 // ============================================================================
-console.log('\n[C] wireSubagentLearnings — spy core (wiring contract)');
-{
-  const ctx = makeFakeCtx();
-  const calls = { postSubagentReport: [] };
-  const spyCore = {
-    postSubagentReport: (...a) => {
-      calls.postSubagentReport.push(a);
-      return Promise.resolve(true);
-    },
-  };
-  const state = { core: spyCore, sid: 'p1' };
-  const deps = makeDeps({
-    getStateBySession: (id) => (id === 'p1' ? state : undefined),
+describe("[C] wireSubagentLearnings — spy core (wiring contract)", () => {
+  let ctx;
+  let calls;
+  let deps;
+
+  beforeAll(() => {
+    ctx = makeFakeCtx();
+    calls = { postSubagentReport: [] };
+    const spyCore = {
+      postSubagentReport: (...a) => {
+        calls.postSubagentReport.push(a);
+        return Promise.resolve(true);
+      },
+    };
+    const state = { core: spyCore, sid: "p1" };
+    deps = makeDeps({
+      getStateBySession: (id) => (id === "p1" ? state : undefined),
+    });
+    wireSubagentLearnings(ctx, deps.proxy);
   });
-  wireSubagentLearnings(ctx, deps.proxy);
 
-  assert(
-    ctx.handlers.size === 1 && ctx.handlers.has('subagent/end'),
-    `subscribes only to event "subagent/end" (got: ${[...ctx.handlers.keys()].join(', ')})`,
-  );
-
-  const reportText = 'Task done.\n## Key Learnings\n- widget uses X';
-  ctx.emit('subagent/end', {
-    parentSessionId: 'p1',
-    lastAssistantMessage: [
-      { type: 'text', text: 'Task done.' },
-      { type: 'text', text: '## Key Learnings\n- widget uses X' },
-    ],
+  it('subscribes only to event "subagent/end"', () => {
+    expect(ctx.handlers.size).toBe(1);
+    expect(ctx.handlers.has("subagent/end")).toBe(true);
   });
-  await waitFor(() => calls.postSubagentReport.length >= 1);
-  assert(
-    calls.postSubagentReport.length === 1,
-    'subagent/end with a report triggers exactly one core.postSubagentReport',
-  );
-  const [parentArg, reportArg, typeArg] = calls.postSubagentReport[0] ?? [];
-  assert(parentArg === 'p1', `arg1 = parentSessionId "p1" (got ${JSON.stringify(parentArg)})`);
-  assert(
-    reportArg === reportText,
-    `arg2 = text blocks joined with \\n and trimmed (got ${JSON.stringify(reportArg)})`,
-  );
-  assert(
-    typeArg === undefined,
-    `arg3 (agentType) = undefined — SubagentRunEndInfo has no child-type field (got ${JSON.stringify(typeArg)})`,
-  );
 
-  // The wire does NOT duplicate the phrase gate — core owns it. Non-matching text
-  // must still reach the core (which will settle false without a request).
-  ctx.emit('subagent/end', {
-    parentSessionId: 'p1',
-    lastAssistantMessage: [{ type: 'text', text: 'plain summary, no magic words' }],
+  it("subagent/end with a report triggers exactly one core.postSubagentReport", async () => {
+    ctx.emit("subagent/end", {
+      parentSessionId: "p1",
+      lastAssistantMessage: [
+        { type: "text", text: "Task done." },
+        { type: "text", text: "## Key Learnings\n- widget uses X" },
+      ],
+    });
+    await waitFor(() => calls.postSubagentReport.length >= 1);
+    expect(calls.postSubagentReport.length).toBe(1);
   });
-  await waitFor(() => calls.postSubagentReport.length >= 2);
-  assert(
-    calls.postSubagentReport.length === 2,
-    'non-matching report is still forwarded to core (KEY_LEARNINGS gate lives in core, not the wire)',
-  );
 
-  // missing parentSessionId / unknown parent -> no call
-  ctx.emit('subagent/end', {
-    lastAssistantMessage: [{ type: 'text', text: '## Key Learnings x' }],
+  it("postSubagentReport args: parentSessionId, joined+trimmed report text, undefined agentType", () => {
+    const [parentArg, reportArg, typeArg] = calls.postSubagentReport[0] ?? [];
+    expect(parentArg).toBe("p1");
+    expect(reportArg).toBe("Task done.\n## Key Learnings\n- widget uses X");
+    expect(typeArg).toBeUndefined();
   });
-  ctx.emit('subagent/end', {
-    parentSessionId: 'zz',
-    lastAssistantMessage: [{ type: 'text', text: '## Key Learnings x' }],
+
+  it("non-matching report is still forwarded to core (KEY_LEARNINGS gate lives in core, not the wire)", async () => {
+    ctx.emit("subagent/end", {
+      parentSessionId: "p1",
+      lastAssistantMessage: [{ type: "text", text: "plain summary, no magic words" }],
+    });
+    await waitFor(() => calls.postSubagentReport.length >= 2);
+    expect(calls.postSubagentReport.length).toBe(2);
   });
-  await settle(100);
-  assert(
-    calls.postSubagentReport.length === 2,
-    'no call when parentSessionId is missing or unmapped',
-  );
 
-  // empty blocks -> no call
-  ctx.emit('subagent/end', { parentSessionId: 'p1', lastAssistantMessage: [] });
-  await settle(100);
-  assert(calls.postSubagentReport.length === 2, 'empty lastAssistantMessage triggers no call');
+  it("no call when parentSessionId is missing or unmapped", async () => {
+    ctx.emit("subagent/end", {
+      lastAssistantMessage: [{ type: "text", text: "## Key Learnings x" }],
+    });
+    ctx.emit("subagent/end", {
+      parentSessionId: "zz",
+      lastAssistantMessage: [{ type: "text", text: "## Key Learnings x" }],
+    });
+    await settle(100);
+    expect(calls.postSubagentReport.length).toBe(2);
+  });
 
-  var learningsDepsRead = new Set(deps.accessed);
-  assert(
-    learningsDepsRead.has('getStateBySession') && !learningsDepsRead.has('getStateForAgent'),
-    `wireSubagentLearnings reads only deps.getStateBySession (read: ${[...learningsDepsRead].join(', ')})`,
-  );
-}
+  it("empty lastAssistantMessage triggers no call", async () => {
+    ctx.emit("subagent/end", { parentSessionId: "p1", lastAssistantMessage: [] });
+    await settle(100);
+    expect(calls.postSubagentReport.length).toBe(2);
+  });
+
+  it("wireSubagentLearnings reads only deps.getStateBySession", () => {
+    learningsDepsRead = new Set(deps.accessed);
+    expect(learningsDepsRead.has("getStateBySession")).toBe(true);
+    expect(learningsDepsRead.has("getStateForAgent")).toBe(false);
+  });
+});
 
 // ============================================================================
 // [D] wireSubagentLearnings — REAL core: KEY_LEARNINGS_PHRASE gating
 // ============================================================================
-console.log('\n[D] wireSubagentLearnings — real core (KEY_LEARNINGS_PHRASE gating)');
-{
-  const { post, log } = makeFakePost((path) =>
-    path === '/api/demo/sessions' ? fakeResponse({ created: true }) : fakeResponse({}),
-  );
-  const core = createSessionCore({
-    agent: 'rembric-dsh',
-    baseUrl: 'http://127.0.0.1:1',
-    apiToken: 'tok',
-    slug: 'demo',
-    cwd: '/repo',
-    post,
-  });
-  await core.ensureSession('p2');
-  const state = { core, sid: 'p2' };
-  const ctx = makeFakeCtx();
-  const deps = makeDeps({ getStateBySession: (id) => (id === 'p2' ? state : undefined) });
-  wireSubagentLearnings(ctx, deps.proxy);
+describe("[D] wireSubagentLearnings — real core (KEY_LEARNINGS_PHRASE gating)", () => {
+  let log;
+  let ctx;
 
-  const learningsPosts = () => log.filter((e) => e.path.endsWith('/learnings')).length;
-
-  ctx.emit('subagent/end', {
-    parentSessionId: 'p2',
-    lastAssistantMessage: [{ type: 'text', text: '## Key Learnings\n- shipped it' }],
+  beforeAll(async () => {
+    const { post, log: postLog } = makeFakePost((path) =>
+      path === "/api/demo/sessions" ? fakeResponse({ created: true }) : fakeResponse({}),
+    );
+    log = postLog;
+    const core = createSessionCore({
+      agent: "rembric-dsh",
+      baseUrl: "http://127.0.0.1:1",
+      apiToken: "tok",
+      slug: "demo",
+      cwd: "/repo",
+      post,
+    });
+    await core.ensureSession("p2");
+    const state = { core, sid: "p2" };
+    ctx = makeFakeCtx();
+    const deps = makeDeps({ getStateBySession: (id) => (id === "p2" ? state : undefined) });
+    wireSubagentLearnings(ctx, deps.proxy);
   });
-  const learned = await waitFor(() => learningsPosts() >= 1);
-  assert(learned, 'report containing "Key Learnings" POSTs /api/demo/sessions/p2/learnings');
-  const entry = log.find((e) => e.path.endsWith('/learnings'));
-  assert(
-    entry?.body?.report === '## Key Learnings\n- shipped it',
-    `body.report carries the full report text (got ${JSON.stringify(entry?.body?.report)})`,
-  );
-  assert(
-    entry && !('agentType' in entry.body),
-    'body carries no agentType key when agentType is undefined',
-  );
 
-  // non-matching report -> gated out, no POST
-  ctx.emit('subagent/end', {
-    parentSessionId: 'p2',
-    lastAssistantMessage: [{ type: 'text', text: 'plain summary, no magic words' }],
-  });
-  await settle(200);
-  assert(learningsPosts() === 1, 'report without the "key learnings" phrase is gated out (no POST)');
+  const learningsPosts = () => log.filter((e) => e.path.endsWith("/learnings")).length;
 
-  // phrase only inside <private> -> redacted before the gate -> no POST
-  ctx.emit('subagent/end', {
-    parentSessionId: 'p2',
-    lastAssistantMessage: [{ type: 'text', text: '<private>Key Learnings: secret</private>' }],
+  it('report containing "Key Learnings" POSTs /api/demo/sessions/p2/learnings', async () => {
+    ctx.emit("subagent/end", {
+      parentSessionId: "p2",
+      lastAssistantMessage: [{ type: "text", text: "## Key Learnings\n- shipped it" }],
+    });
+    const learned = await waitFor(() => learningsPosts() >= 1);
+    expect(learned).toBe(true);
   });
-  await settle(200);
-  assert(
-    learningsPosts() === 1,
-    'phrase hidden inside <private> is redacted before the gate (no POST)',
-  );
 
-  // unknown parent session (never ensureSession-ed) -> core returns false, no POST
-  ctx.emit('subagent/end', {
-    parentSessionId: 'ghost',
-    lastAssistantMessage: [{ type: 'text', text: '## Key Learnings x' }],
+  it("body.report carries the full report text", () => {
+    const entry = log.find((e) => e.path.endsWith("/learnings"));
+    expect(entry?.body?.report).toBe("## Key Learnings\n- shipped it");
   });
-  await settle(200);
-  assert(learningsPosts() === 1, 'parent session unknown to the core -> no POST');
-}
+
+  it("body carries no agentType key when agentType is undefined", () => {
+    const entry = log.find((e) => e.path.endsWith("/learnings"));
+    expect(entry).toBeTruthy();
+    expect("agentType" in entry.body).toBe(false);
+  });
+
+  it('report without the "key learnings" phrase is gated out (no POST)', async () => {
+    ctx.emit("subagent/end", {
+      parentSessionId: "p2",
+      lastAssistantMessage: [{ type: "text", text: "plain summary, no magic words" }],
+    });
+    await settle(200);
+    expect(learningsPosts()).toBe(1);
+  });
+
+  it("phrase hidden inside <private> is redacted before the gate (no POST)", async () => {
+    ctx.emit("subagent/end", {
+      parentSessionId: "p2",
+      lastAssistantMessage: [{ type: "text", text: "<private>Key Learnings: secret</private>" }],
+    });
+    await settle(200);
+    expect(learningsPosts()).toBe(1);
+  });
+
+  it("parent session unknown to the core -> no POST", async () => {
+    ctx.emit("subagent/end", {
+      parentSessionId: "ghost",
+      lastAssistantMessage: [{ type: "text", text: "## Key Learnings x" }],
+    });
+    await settle(200);
+    expect(learningsPosts()).toBe(1);
+  });
+});
 
 // ============================================================================
 // [E] deps contract vs host.js phase3
 // ============================================================================
-console.log('\n[E] deps contract vs host.js phase3 (host.js:435-441)');
-{
-  const used = new Set([...fileRecallDepsRead, ...learningsDepsRead]);
-  console.log(`  wire functions read : ${[...used].sort().join(', ')}`);
-  console.log(`  host.js phase3 gives: ${HOST_PROVIDES.join(', ')}`);
-  const missing = [...used].filter((k) => !HOST_PROVIDES.includes(k));
-  assert(
-    missing.length === 0,
-    `every dep read by the wire functions is provided by host.js (missing: ${missing.join(', ') || 'none'})`,
-  );
-}
-
-// ---- summary -----------------------------------------------------------------
-console.log(
-  `\n${'='.repeat(64)}\n${failed === 0 ? 'ALL PASS' : 'FAILURES'}: ${passed} passed, ${failed} failed\n`,
-);
-if (failed > 0) {
-  for (const f of failures) console.log(`  - ${f}`);
-  process.exitCode = 1;
-}
+describe("[E] deps contract vs host.js phase3 (host.js:435-441)", () => {
+  it("every dep read by the wire functions is provided by host.js", () => {
+    // Guard against a vacuous pass: if sections A and C did not run (e.g. a
+    // `.only`/skip/filter run targeting this test alone), both sets are empty
+    // and `missing` would be trivially empty. E must fail in that case.
+    expect(fileRecallDepsRead.size).toBeGreaterThan(0);
+    expect(learningsDepsRead.size).toBeGreaterThan(0);
+    const used = new Set([...fileRecallDepsRead, ...learningsDepsRead]);
+    console.log(`  wire functions read : ${[...used].sort().join(", ")}`);
+    console.log(`  host.js phase3 gives: ${HOST_PROVIDES.join(", ")}`);
+    const missing = [...used].filter((k) => !HOST_PROVIDES.includes(k));
+    expect(missing).toEqual([]);
+  });
+});

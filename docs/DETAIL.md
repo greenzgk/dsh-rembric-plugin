@@ -160,14 +160,14 @@ The DSH GUI launched from the desktop does **not** inherit your shell's
 
 ## Project resolution rules
 
-| Situation | Result |
-| --- | --- |
-| `.rembric` file with `PROJECT_SLUG=…` in the tree (walked up to the repo root) | that project |
-| `REMBRIC_PROJECT_SLUG` / `projectSlug` set | that project (an explicit slug wins; a mismatch with the repo binding is reported as a conflict but the explicit slug is used) |
-| Inside a git repo, repo bound to a project | the bound project |
-| Inside a git repo, repo not bound | **off** for the session: one warning line, the Rembric tools are not registered |
-| Not in git, no slug | the `default` project |
-| No token at all | plugin stays off, one warning line |
+| Situation                                                                      | Result                                                                                                                         |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `.rembric` file with `PROJECT_SLUG=…` in the tree (walked up to the repo root) | that project                                                                                                                   |
+| `REMBRIC_PROJECT_SLUG` / `projectSlug` set                                     | that project (an explicit slug wins; a mismatch with the repo binding is reported as a conflict but the explicit slug is used) |
+| Inside a git repo, repo bound to a project                                     | the bound project                                                                                                              |
+| Inside a git repo, repo not bound                                              | **off** for the session: one warning line, the Rembric tools are not registered                                                |
+| Not in git, no slug                                                            | the `default` project                                                                                                          |
+| No token at all                                                                | plugin stays off, one warning line                                                                                             |
 
 ## Status
 

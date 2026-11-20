@@ -3,36 +3,36 @@
 // Decides which Rembric project a session talks to: an explicit `.rembric` file,
 // the REMBRIC_PROJECT_SLUG environment variable, or a git repository binding.
 
-import { execFile } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import { execFile } from "node:child_process";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
 
 export const SLUG_RE = /^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$/;
-export const FINGERPRINT_HEADER = 'X-Rembric-Repo-Fingerprint';
+export const FINGERPRINT_HEADER = "X-Rembric-Repo-Fingerprint";
 export const RESOLVE_TIMEOUT_MS = 2000;
 const GIT_TIMEOUT_MS = 2000;
 const FINGERPRINT_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const REMOTES_MAX = 8;
 const REMOTE_MAX_CHARS = 512;
 const ROOT_NAME_MAX_CHARS = 255;
-const UNBOUND_REASONS = new Set(['not_bound', 'unknown_remote', 'no_fingerprint']);
+const UNBOUND_REASONS = new Set(["not_bound", "unknown_remote", "no_fingerprint"]);
 const GIT_LOCATION_ENV = [
-  'GIT_DIR',
-  'GIT_WORK_TREE',
-  'GIT_COMMON_DIR',
-  'GIT_INDEX_FILE',
-  'GIT_PREFIX',
-  'GIT_OBJECT_DIRECTORY',
-  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
-  'GIT_NAMESPACE',
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_COMMON_DIR",
+  "GIT_INDEX_FILE",
+  "GIT_PREFIX",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_NAMESPACE",
 ];
 
 export function parseDotenv(content) {
   const out = {};
   for (const line of content.split(/\r?\n/)) {
     const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eq = trimmed.indexOf('=');
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
     if (eq === -1) continue;
     const key = trimmed.slice(0, eq).trim();
     let value = trimmed.slice(eq + 1).trim();
@@ -55,10 +55,10 @@ function gitEnv() {
 
 function runGit(cwd, args) {
   return new Promise((done) => {
-    execFile('git', args, { cwd, timeout: GIT_TIMEOUT_MS, env: gitEnv() }, (error, stdout) =>
+    execFile("git", args, { cwd, timeout: GIT_TIMEOUT_MS, env: gitEnv() }, (error, stdout) =>
       done(
         error
-          ? { ok: false, missing: error.code === 'ENOENT', out: '' }
+          ? { ok: false, missing: error.code === "ENOENT", out: "" }
           : { ok: true, out: String(stdout).trim() },
       ),
     );
@@ -75,81 +75,81 @@ function realDirectory(directory) {
 
 function dotGitAncestor(directory) {
   for (let dir = realDirectory(directory); ; dir = dirname(dir)) {
-    if (existsSync(join(dir, '.git'))) return dir;
+    if (existsSync(join(dir, ".git"))) return dir;
     if (dirname(dir) === dir) return null;
   }
 }
 
 export function normalizeRemote(raw) {
-  let value = String(raw ?? '').trim();
+  let value = String(raw ?? "").trim();
   if (!value) return null;
   const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(value);
   if (scheme) {
-    if (scheme[1].toLowerCase() === 'file') return null;
+    if (scheme[1].toLowerCase() === "file") return null;
     value = value.slice(scheme[0].length);
-    value = value.slice(value.lastIndexOf('@') + 1).replace(/[?#].*$/, '');
-    const slash = value.indexOf('/');
+    value = value.slice(value.lastIndexOf("@") + 1).replace(/[?#].*$/, "");
+    const slash = value.indexOf("/");
     const authority = slash === -1 ? value : value.slice(0, slash);
-    const path = slash === -1 ? '' : value.slice(slash);
-    value = `${authority.replace(/:\d*$/, '')}${path}`;
+    const path = slash === -1 ? "" : value.slice(slash);
+    value = `${authority.replace(/:\d*$/, "")}${path}`;
   } else {
-    value = value.slice(value.lastIndexOf('@') + 1);
+    value = value.slice(value.lastIndexOf("@") + 1);
     const scp = /^([^:/\\]+):(?!\/\/)(.*)$/.exec(value);
     if (!scp || scp[1].length < 2) return null;
-    value = `${scp[1]}/${scp[2].replace(/[?#].*$/, '')}`;
+    value = `${scp[1]}/${scp[2].replace(/[?#].*$/, "")}`;
   }
-  if (value.startsWith('/') || value.includes('\\')) return null;
+  if (value.startsWith("/") || value.includes("\\")) return null;
   value = value
     .toLowerCase()
-    .replace(/\/{2,}/g, '/')
-    .replace(/\/+$/, '')
-    .replace(/\.git$/, '')
-    .replace(/\/+$/, '');
+    .replace(/\/{2,}/g, "/")
+    .replace(/\/+$/, "")
+    .replace(/\.git$/, "")
+    .replace(/\/+$/, "");
   if (!value || value.length > REMOTE_MAX_CHARS) return null;
   return value;
 }
 
 export async function inspectRepository(startDir) {
-  const inside = await runGit(startDir, ['rev-parse', '--is-inside-work-tree']);
+  const inside = await runGit(startDir, ["rev-parse", "--is-inside-work-tree"]);
   if (!inside.ok && inside.missing) {
     const root = dotGitAncestor(startDir);
     return root
-      ? { insideGit: true, root, fingerprint: null, cause: 'git_unavailable', remotes: [] }
+      ? { insideGit: true, root, fingerprint: null, cause: "git_unavailable", remotes: [] }
       : { insideGit: false };
   }
-  if (!inside.ok || inside.out !== 'true') return { insideGit: false };
+  if (!inside.ok || inside.out !== "true") return { insideGit: false };
 
-  const toplevel = await runGit(startDir, ['rev-parse', '--show-toplevel']);
+  const toplevel = await runGit(startDir, ["rev-parse", "--show-toplevel"]);
   const root = toplevel.ok && toplevel.out ? realDirectory(toplevel.out) : realDirectory(startDir);
   const repository = { insideGit: true, root, fingerprint: null, cause: null, remotes: [] };
 
-  const shallow = await runGit(startDir, ['rev-parse', '--is-shallow-repository']);
-  if (!shallow.ok || shallow.out !== 'false') {
-    repository.cause = shallow.ok && shallow.out === 'true' ? 'shallow' : 'git_unavailable';
+  const shallow = await runGit(startDir, ["rev-parse", "--is-shallow-repository"]);
+  if (!shallow.ok || shallow.out !== "false") {
+    repository.cause = shallow.ok && shallow.out === "true" ? "shallow" : "git_unavailable";
     return repository;
   }
 
   const rootCommit = await runGit(startDir, [
-    'rev-list',
-    '--first-parent',
-    '--max-parents=0',
-    'HEAD',
+    "rev-list",
+    "--first-parent",
+    "--max-parents=0",
+    "HEAD",
   ]);
   if (!rootCommit.ok) {
-    const head = await runGit(startDir, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
-    repository.cause = head.ok ? 'git_unavailable' : 'no_commit';
+    const head = await runGit(startDir, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+    repository.cause = head.ok ? "git_unavailable" : "no_commit";
     return repository;
   }
   if (!FINGERPRINT_RE.test(rootCommit.out)) {
-    repository.cause = 'git_unavailable';
+    repository.cause = "git_unavailable";
     return repository;
   }
   repository.fingerprint = rootCommit.out;
 
-  const names = await runGit(startDir, ['remote']);
+  const names = await runGit(startDir, ["remote"]);
   const remotes = [];
-  for (const name of names.ok ? names.out.split('\n').filter(Boolean) : []) {
-    const url = await runGit(startDir, ['remote', 'get-url', name]);
+  for (const name of names.ok ? names.out.split("\n").filter(Boolean) : []) {
+    const url = await runGit(startDir, ["remote", "get-url", name]);
     const normalized = url.ok ? normalizeRemote(url.out) : null;
     if (normalized && !remotes.includes(normalized)) remotes.push(normalized);
     if (remotes.length >= REMOTES_MAX) break;
@@ -160,7 +160,7 @@ export async function inspectRepository(startDir) {
 
 function readCandidate(file, displayFile) {
   try {
-    const parsed = parseDotenv(readFileSync(file, 'utf8'));
+    const parsed = parseDotenv(readFileSync(file, "utf8"));
     if (!parsed.PROJECT_SLUG) return { slug: null, issue: `${displayFile} has no PROJECT_SLUG` };
     if (!SLUG_RE.test(parsed.PROJECT_SLUG)) {
       return {
@@ -176,19 +176,19 @@ function readCandidate(file, displayFile) {
 
 function findRembric(projectDir, checkoutRoot) {
   if (!checkoutRoot) {
-    const file = join(projectDir, '.rembric');
+    const file = join(projectDir, ".rembric");
     if (!existsSync(file))
       return { slug: null, issue: `No .rembric in ${projectDir}`, source: null };
-    return { ...readCandidate(file, file), source: 'rembric' };
+    return { ...readCandidate(file, file), source: "rembric" };
   }
   const start = realDirectory(projectDir);
   const within = start === checkoutRoot || start.startsWith(`${checkoutRoot}${sep}`);
   for (let dir = start; ; dir = dirname(dir)) {
-    const file = join(dir, '.rembric');
+    const file = join(dir, ".rembric");
     if (existsSync(file)) {
       return {
         ...readCandidate(file, file),
-        source: dir === checkoutRoot ? 'rembric-root' : 'rembric-nested',
+        source: dir === checkoutRoot ? "rembric-root" : "rembric-nested",
       };
     }
     if (!within || dir === checkoutRoot || dirname(dir) === dir) break;
@@ -205,7 +205,7 @@ export function resolveSlug(projectDir, env = process.env, checkoutRoot = null) 
   const found = findRembric(projectDir, checkoutRoot);
   if (found.slug) return { slug: found.slug, source: found.source, issue: null };
   if (environmentSlug && SLUG_RE.test(environmentSlug)) {
-    return { slug: environmentSlug, source: 'env', issue: found.issue };
+    return { slug: environmentSlug, source: "env", issue: found.issue };
   }
   if (environmentSlug) {
     return {
@@ -218,84 +218,84 @@ export function resolveSlug(projectDir, env = process.env, checkoutRoot = null) 
 }
 
 export function buildEndpoint(baseUrl, slug) {
-  return `${baseUrl.replace(/\/+$/, '')}/mcp${slug ? `/${slug}` : ''}`;
+  return `${baseUrl.replace(/\/+$/, "")}/mcp${slug ? `/${slug}` : ""}`;
 }
 
 async function postResolve({ serverUrl, apiToken, body, fetchImpl, timeoutMs }) {
-  const url = `${serverUrl.replace(/\/+$/, '')}/api/repositories/resolve`;
+  const url = `${serverUrl.replace(/\/+$/, "")}/api/repositories/resolve`;
   let response;
   try {
     response = await fetchImpl(url, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
-    const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
-    return { failure: timedOut ? 'timeout' : 'network' };
+    const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";
+    return { failure: timedOut ? "timeout" : "network" };
   }
   const payload = await response.json().catch(() => null);
-  if (response.status === 409 && payload?.code === 'repository_ambiguous') {
+  if (response.status === 409 && payload?.code === "repository_ambiguous") {
     const slugs = Array.isArray(payload.slugs) ? payload.slugs.filter((s) => SLUG_RE.test(s)) : [];
-    return { failure: 'ambiguous', slugs };
+    return { failure: "ambiguous", slugs };
   }
-  if (!response.ok) return { failure: 'status', status: response.status };
-  if (!payload || payload.ok !== true) return { failure: 'invalid_response' };
+  if (!response.ok) return { failure: "status", status: response.status };
+  if (!payload || payload.ok !== true) return { failure: "invalid_response" };
   return { answer: payload };
 }
 
 function fingerprintLabel(repository) {
-  return repository.fingerprint ? repository.fingerprint.slice(0, 12) : 'without fingerprint';
+  return repository.fingerprint ? repository.fingerprint.slice(0, 12) : "without fingerprint";
 }
 
 const NO_FINGERPRINT_REMEDY = {
   shallow:
-    'it is a shallow clone, so its history has no reliable root; fetch the full history (git fetch --unshallow) or add a .rembric file containing PROJECT_SLUG=<slug>',
+    "it is a shallow clone, so its history has no reliable root; fetch the full history (git fetch --unshallow) or add a .rembric file containing PROJECT_SLUG=<slug>",
   no_commit:
-    'it has no commit yet; make a first commit or add a .rembric file containing PROJECT_SLUG=<slug>',
+    "it has no commit yet; make a first commit or add a .rembric file containing PROJECT_SLUG=<slug>",
   git_unavailable:
-    'git could not read its history; make git available or add a .rembric file containing PROJECT_SLUG=<slug>',
+    "git could not read its history; make git available or add a .rembric file containing PROJECT_SLUG=<slug>",
 };
 
 function unboundMessage(repository, reason) {
   if (!repository.fingerprint) {
     return (
-      `This git repository has no fingerprint (${NO_FINGERPRINT_REMEDY[repository.cause ?? 'git_unavailable']}); ` +
-      'Rembric memory is off for this session.'
+      `This git repository has no fingerprint (${NO_FINGERPRINT_REMEDY[repository.cause ?? "git_unavailable"]}); ` +
+      "Rembric memory is off for this session."
     );
   }
   const why =
-    reason === 'unknown_remote'
-      ? 'its remotes do not match the project bound to its history'
-      : 'it is not bound to a project';
+    reason === "unknown_remote"
+      ? "its remotes do not match the project bound to its history"
+      : "it is not bound to a project";
   return (
     `This repository (${fingerprintLabel(repository)}) has no Rembric project: ${why}. ` +
-    'Memory is off for this session. Before this version, a repository without a .rembric file used ' +
-    'the default project; bind the repository to the project its earlier sessions used to keep that ' +
-    'continuity. Ask an admin to bind it ' +
-    'from the dashboard, or add a .rembric file containing PROJECT_SLUG=<slug>. A binding applies ' +
-    'from the next session.'
+    "Memory is off for this session. Before this version, a repository without a .rembric file used " +
+    "the default project; bind the repository to the project its earlier sessions used to keep that " +
+    "continuity. Ask an admin to bind it " +
+    "from the dashboard, or add a .rembric file containing PROJECT_SLUG=<slug>. A binding applies " +
+    "from the next session."
   );
 }
 
 function refusedMessage(serverUrl, result, timeoutMs) {
   const remedy =
-    'update the Rembric server, or add a .rembric file containing PROJECT_SLUG=<slug> to the checkout. ' +
-    'Not connecting, so nothing lands in the default project.';
+    "update the Rembric server, or add a .rembric file containing PROJECT_SLUG=<slug> to the checkout. " +
+    "Not connecting, so nothing lands in the default project.";
   switch (result.failure) {
-    case 'ambiguous':
+    case "ambiguous":
       return (
-        `This repository is bound to several projects you can access (${result.slugs.join(', ')}); ` +
-        'add a .rembric file containing PROJECT_SLUG=<slug> naming one of them. Not connecting.'
+        `This repository is bound to several projects you can access (${result.slugs.join(", ")}); ` +
+        "add a .rembric file containing PROJECT_SLUG=<slug> naming one of them. Not connecting."
       );
-    case 'no_credentials':
-      return 'REMBRIC_SERVER_URL or REMBRIC_API_TOKEN missing, so this repository cannot be resolved to a project. Not connecting.';
-    case 'timeout':
+    case "no_credentials":
+      return "REMBRIC_SERVER_URL or REMBRIC_API_TOKEN missing, so this repository cannot be resolved to a project. Not connecting.";
+    case "timeout":
       return `${serverUrl} did not answer POST /api/repositories/resolve within ${timeoutMs} ms; ${remedy}`;
-    case 'network':
+    case "network":
       return `${serverUrl} could not be reached for POST /api/repositories/resolve; ${remedy}`;
-    case 'status':
+    case "status":
       return `${serverUrl} answered POST /api/repositories/resolve with HTTP ${result.status}, so it does not support repository fingerprints; ${remedy}`;
     default:
       return `${serverUrl} answered POST /api/repositories/resolve with an unexpected body; ${remedy}`;
@@ -303,10 +303,10 @@ function refusedMessage(serverUrl, result, timeoutMs) {
 }
 
 function conflictMessage(slug, source, boundSlugs) {
-  const from = source === 'env' ? 'REMBRIC_PROJECT_SLUG' : '.rembric';
+  const from = source === "env" ? "REMBRIC_PROJECT_SLUG" : ".rembric";
   return (
     `${from} selects project '${slug}', but this repository is bound to ` +
-    `${boundSlugs.map((s) => `'${s}'`).join(', ')}; using '${slug}'.`
+    `${boundSlugs.map((s) => `'${s}'`).join(", ")}; using '${slug}'.`
   );
 }
 
@@ -338,7 +338,7 @@ export async function resolveProject({
   if (!repository.insideGit) {
     const selected = resolveSlug(startDir, env, null);
     return {
-      mode: selected.slug ? 'project' : 'default',
+      mode: selected.slug ? "project" : "default",
       slug: selected.slug,
       source: selected.source,
       issue: selected.issue,
@@ -351,7 +351,7 @@ export async function resolveProject({
   }
 
   const selected = resolveSlug(startDir, env, repository.root);
-  const header = repository.fingerprint ?? 'unavailable';
+  const header = repository.fingerprint ?? "unavailable";
   const base = {
     slug: selected.slug,
     source: selected.slug ? selected.source : null,
@@ -365,7 +365,7 @@ export async function resolveProject({
   const credentials = Boolean(serverUrl && apiToken);
 
   if (selected.slug) {
-    if (!repository.fingerprint || !credentials) return { ...base, mode: 'project' };
+    if (!repository.fingerprint || !credentials) return { ...base, mode: "project" };
     const result = await postResolve({
       serverUrl,
       apiToken,
@@ -379,24 +379,24 @@ export async function resolveProject({
       },
     });
     const boundSlugs = result.answer?.conflict?.boundSlugs;
-    if (result.answer?.outcome === 'explicit' && Array.isArray(boundSlugs) && boundSlugs.length) {
+    if (result.answer?.outcome === "explicit" && Array.isArray(boundSlugs) && boundSlugs.length) {
       const conflict = { boundSlugs: boundSlugs.filter((s) => SLUG_RE.test(s)) };
       return {
         ...base,
-        mode: 'project',
+        mode: "project",
         conflict,
         message: conflictMessage(selected.slug, selected.source, conflict.boundSlugs),
       };
     }
-    return { ...base, mode: 'project' };
+    return { ...base, mode: "project" };
   }
 
   if (!credentials) {
-    const failure = { failure: 'no_credentials' };
+    const failure = { failure: "no_credentials" };
     return {
       ...base,
-      mode: 'refused',
-      reason: 'no_credentials',
+      mode: "refused",
+      reason: "no_credentials",
       message: refusedMessage(serverUrl, failure, budget),
     };
   }
@@ -413,19 +413,19 @@ export async function resolveProject({
     },
   });
   const answer = result.answer;
-  if (answer?.outcome === 'bound' && typeof answer.slug === 'string' && SLUG_RE.test(answer.slug)) {
-    return { ...base, mode: 'project', slug: answer.slug, source: 'fingerprint' };
+  if (answer?.outcome === "bound" && typeof answer.slug === "string" && SLUG_RE.test(answer.slug)) {
+    return { ...base, mode: "project", slug: answer.slug, source: "fingerprint" };
   }
-  if (answer?.outcome === 'unbound') {
-    const reason = UNBOUND_REASONS.has(answer.reason) ? answer.reason : 'not_bound';
-    return { ...base, mode: 'unbound', reason, message: unboundMessage(repository, reason) };
+  if (answer?.outcome === "unbound") {
+    const reason = UNBOUND_REASONS.has(answer.reason) ? answer.reason : "not_bound";
+    return { ...base, mode: "unbound", reason, message: unboundMessage(repository, reason) };
   }
-  const failure = answer ? { failure: 'invalid_response' } : result;
+  const failure = answer ? { failure: "invalid_response" } : result;
   return {
     ...base,
-    mode: 'refused',
-    reason: failure.failure === 'status' ? `http_${failure.status}` : failure.failure,
-    ambiguous: failure.failure === 'ambiguous' ? failure.slugs : undefined,
+    mode: "refused",
+    reason: failure.failure === "status" ? `http_${failure.status}` : failure.failure,
+    ambiguous: failure.failure === "ambiguous" ? failure.slugs : undefined,
     message: refusedMessage(serverUrl, failure, budget),
   };
 }

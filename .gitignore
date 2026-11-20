@@ -1,0 +1,13 @@
+# orchestrator worktrees
+.worktrees/
+
+# dependencies
+node_modules/
+
+# Vite+ generated hook dispatcher (recreated by `vp config`)
+.vite-hooks/_/
+
+# caches
+.vite/
+.pnpm-store/
+*.log

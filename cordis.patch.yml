@@ -14,7 +14,7 @@
 # (preferred) or export REMBRIC_API_TOKEN in the environment that launches DSH.
 - insert:
     - id: rembric
-      name: 'dsh-rembric-plugin'
+      name: "dsh-rembric-plugin"
       config:
-        serverUrl: 'http://127.0.0.1:8790'
-        projectSlug: 'dsh-rembric-plugin'
+        serverUrl: "http://127.0.0.1:8790"
+        projectSlug: "dsh-rembric-plugin"

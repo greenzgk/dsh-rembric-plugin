@@ -11,9 +11,9 @@
 // byte-identical to core.mjs. `underscoreToolNames` is exported for the host
 // to apply at nudge-delivery time (core.mjs does not apply it internally).
 
-import { execFile } from 'node:child_process';
-import { stat } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { execFile } from "node:child_process";
+import { stat } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 
 export const POST_TIMEOUT_MS = 3000;
 // A tool waits on this one, so it gets the recall-hints budget, not the background one.
@@ -35,29 +35,29 @@ const MAX_TITLE_CHARS = 100;
 
 export const RECALL_REGEX = /remember|recall|acuérdate|qué hicimos|what did we do/i;
 export const RECALL_NUDGE =
-  'rembric: User intent: recall. Call memory.search with the user keywords before responding.';
+  "rembric: User intent: recall. Call memory.search with the user keywords before responding.";
 export const FIRST_PROMPT_NUDGE =
-  'rembric: New session — call memory.context with focus set to this prompt before responding, to surface relevant prior work.';
+  "rembric: New session — call memory.context with focus set to this prompt before responding, to surface relevant prior work.";
 export const SESSION_ID_NUDGE_TEMPLATE =
   'rembric: sessionId="{{SESSION_ID}}" — pass it explicitly to memory.save/memory.session_summary/memory.save_prompt now, to guarantee correct attachment; never guess a different one.';
 export const RESUMED_READ_NUDGE =
-  'rembric: Resumed session: read memory.session_get_batch({ ids: [sessionId] }) / sessions[0] in full before writing memory.session_summary.';
+  "rembric: Resumed session: read memory.session_get_batch({ ids: [sessionId] }) / sessions[0] in full before writing memory.session_summary.";
 export const SESSION_OPENING_NUDGE_CORE =
-  'New session — before you finish this turn, call memory.session_summary with a title and a single `## Goal` section describing what this session is for; the other five canonical headings are intentionally left out.';
+  "New session — before you finish this turn, call memory.session_summary with a title and a single `## Goal` section describing what this session is for; the other five canonical headings are intentionally left out.";
 export const SESSION_OPENING_NUDGE = `rembric: ${SESSION_OPENING_NUDGE_CORE}`;
 export const POST_COMPACT_NUDGE_CORE =
-  'Resumed from a compaction. BEFORE continuing:\n' +
-  '1. Call memory.session_get_batch({ ids: [sessionId] }) and read sessions[0] in full.\n' +
-  '2. Call memory.session_summary({title, summary}) with the CURRENT COMPLETE state: sent `##` sections REPLACE their stored counterpart; omitted ones STAY.\n' +
-  '   - title: ≤100 chars, not the cwd.\n' +
-  '   - summary: ≤10000 chars. Use exactly these six Markdown level-2 headings, in this order, each on its own line (never one flat paragraph):\n## Goal\n## Accomplished\n## Decisions+why\n## Verified+how\n## Unfinished+why\n## Files\n' +
-  '3. Missing detail? memory.context or memory.search.\n' +
-  '4. Then continue.';
+  "Resumed from a compaction. BEFORE continuing:\n" +
+  "1. Call memory.session_get_batch({ ids: [sessionId] }) and read sessions[0] in full.\n" +
+  "2. Call memory.session_summary({title, summary}) with the CURRENT COMPLETE state: sent `##` sections REPLACE their stored counterpart; omitted ones STAY.\n" +
+  "   - title: ≤100 chars, not the cwd.\n" +
+  "   - summary: ≤10000 chars. Use exactly these six Markdown level-2 headings, in this order, each on its own line (never one flat paragraph):\n## Goal\n## Accomplished\n## Decisions+why\n## Verified+how\n## Unfinished+why\n## Files\n" +
+  "3. Missing detail? memory.context or memory.search.\n" +
+  "4. Then continue.";
 
 const DOTTED_TOOL_NAME = /\b(memory|project)\.([a-z][a-z0-9_]*)/g;
 
 export function underscoreToolNames(text) {
-  return text.replace(DOTTED_TOOL_NAME, '$1_$2');
+  return text.replace(DOTTED_TOOL_NAME, "$1_$2");
 }
 
 /** Read per use, not once: an override set after this module loads still wins. */
@@ -70,10 +70,10 @@ export function extractCommandPaths(command) {
   if (!command) return [];
   const paths = [];
   for (let token of String(command).split(/[ \t\n"'`=();|&<>,:]+/)) {
-    while (token.startsWith('./')) token = token.slice(2);
+    while (token.startsWith("./")) token = token.slice(2);
     if (token.length <= 1) continue;
-    const absolute = token.startsWith('/');
-    if (!absolute && !(token.includes('/') && /\.[A-Za-z0-9]+$/.test(token))) continue;
+    const absolute = token.startsWith("/");
+    if (!absolute && !(token.includes("/") && /\.[A-Za-z0-9]+$/.test(token))) continue;
     if (paths.includes(token)) continue;
     paths.push(token);
     if (paths.length >= COMMAND_PATHS_MAX) break;
@@ -84,8 +84,8 @@ export function extractCommandPaths(command) {
 function gitOutput(cwd, args, env = process.env) {
   return new Promise((resolve) => {
     execFile(
-      'git',
-      ['-c', 'core.quotePath=false', '-C', cwd, ...args],
+      "git",
+      ["-c", "core.quotePath=false", "-C", cwd, ...args],
       { timeout: FILE_RECALL_GIT_TIMEOUT_MS, env },
       (err, stdout) => resolve(err ? null : String(stdout)),
     );
@@ -100,26 +100,26 @@ async function trackedRepoPath(cwd, candidate) {
   if (!file?.isFile()) return null;
   const out = await gitOutput(
     cwd,
-    ['ls-files', '--full-name', '--error-unmatch', '--', candidate],
+    ["ls-files", "--full-name", "--error-unmatch", "--", candidate],
     {
       ...process.env,
-      GIT_LITERAL_PATHSPECS: '1',
+      GIT_LITERAL_PATHSPECS: "1",
     },
   );
-  return out?.split('\n')[0] || null;
+  return out?.split("\n")[0] || null;
 }
 
 async function sameNameSiblings(cwd, rel) {
-  const name = rel.split('/').pop() ?? '';
+  const name = rel.split("/").pop() ?? "";
   if (!name || /[[\]*?]/.test(name)) return undefined;
   const out = await gitOutput(cwd, [
-    'ls-files',
-    '--full-name',
-    '--',
+    "ls-files",
+    "--full-name",
+    "--",
     `:(top)*/${name}`,
     `:(top)${name}`,
   ]);
-  const list = out?.split('\n').filter(Boolean) ?? [];
+  const list = out?.split("\n").filter(Boolean) ?? [];
   return list.length > 0 && list.length <= FILE_RECALL_SIBLINGS_MAX ? list : undefined;
 }
 
@@ -128,31 +128,31 @@ export function diag(line) {
 }
 
 export function stripPrivateTags(text) {
-  if (!text) return '';
+  if (!text) return "";
   return text
-    .replace(/<private>[\s\S]*?<\/private>/gi, '[REDACTED]')
-    .replace(/<private>[\s\S]*$/i, '[REDACTED]');
+    .replace(/<private>[\s\S]*?<\/private>/gi, "[REDACTED]")
+    .replace(/<private>[\s\S]*$/i, "[REDACTED]");
 }
 
 function truncate(text, max) {
-  if (!text) return '';
-  return text.length > max ? text.slice(0, max) + '...' : text;
+  if (!text) return "";
+  return text.length > max ? text.slice(0, max) + "..." : text;
 }
 
 export function createSessionCore({ agent, baseUrl: rawBaseUrl, apiToken, slug, cwd, post }) {
   if (!agent) {
-    throw new Error('rembric-plugin-core: createSessionCore requires an `agent`');
+    throw new Error("rembric-plugin-core: createSessionCore requires an `agent`");
   }
 
   // Same trailing-slash normalization core.mjs applied to serverUrl.
-  const baseUrl = rawBaseUrl ? rawBaseUrl.replace(/\/$/, '') : '';
+  const baseUrl = rawBaseUrl ? rawBaseUrl.replace(/\/$/, "") : "";
 
   const disabledReason =
     !baseUrl || !apiToken
-      ? 'REMBRIC_SERVER_URL or REMBRIC_API_TOKEN missing'
+      ? "REMBRIC_SERVER_URL or REMBRIC_API_TOKEN missing"
       : slug
         ? null
-        : `no PROJECT_SLUG in ${cwd ?? '.'}/.rembric`;
+        : `no PROJECT_SLUG in ${cwd ?? "."}/.rembric`;
   const disabled = disabledReason !== null;
   if (disabledReason) {
     diag(`${disabledReason}; plugin disabled`);
@@ -186,7 +186,7 @@ export function createSessionCore({ agent, baseUrl: rawBaseUrl, apiToken, slug, 
     const res = await doPost(path, body, timeoutMs);
     if (!res) return false;
     if (!res.ok) {
-      const detail = await res.text().catch(() => '');
+      const detail = await res.text().catch(() => "");
       diag(`POST ${path} ${res.status} body=${detail}`);
       return false;
     }
@@ -197,7 +197,7 @@ export function createSessionCore({ agent, baseUrl: rawBaseUrl, apiToken, slug, 
     const res = await doPost(path, body);
     if (!res || !res.ok) return { ok: false, created: null };
     const json = await res.json().catch(() => null);
-    return { ok: true, created: typeof json?.created === 'boolean' ? json.created : null };
+    return { ok: true, created: typeof json?.created === "boolean" ? json.created : null };
   }
 
   function isSubAgent(sessionId) {
@@ -250,7 +250,7 @@ export function createSessionCore({ agent, baseUrl: rawBaseUrl, apiToken, slug, 
     const writeDirecting = pending.length > 0 || openingDue;
 
     if (writeDirecting) {
-      lines.push(SESSION_ID_NUDGE_TEMPLATE.replace('{{SESSION_ID}}', sessionId));
+      lines.push(SESSION_ID_NUDGE_TEMPLATE.replace("{{SESSION_ID}}", sessionId));
     }
     if (openingDue) {
       sessionOpeningEmitted.add(sessionId);
@@ -290,37 +290,37 @@ export function createSessionCore({ agent, baseUrl: rawBaseUrl, apiToken, slug, 
   function appendUserMessage(sessionId, rawText) {
     const text = stripPrivateTags(truncate(rawText, MAX_ENTRY_CHARS));
     if (!text) return [];
-    return pushEntry(sessionId, { role: 'user', text });
+    return pushEntry(sessionId, { role: "user", text });
   }
 
   function appendAssistantMessage(sessionId, rawText) {
     const text = stripPrivateTags(truncate(rawText, MAX_ENTRY_CHARS));
     if (!text) return [];
-    return pushEntry(sessionId, { role: 'assistant', text });
+    return pushEntry(sessionId, { role: "assistant", text });
   }
 
   function upsertAssistantMessage(sessionId, messageId, rawText) {
     const text = stripPrivateTags(truncate(rawText, MAX_ENTRY_CHARS));
     if (!text) return [];
     const arr = entriesFor(sessionId);
-    const existing = arr.findIndex((e) => e.role === 'assistant' && e.id === messageId);
+    const existing = arr.findIndex((e) => e.role === "assistant" && e.id === messageId);
     if (existing >= 0) {
-      arr[existing] = { role: 'assistant', text, id: messageId };
+      arr[existing] = { role: "assistant", text, id: messageId };
       return [];
     }
-    return pushEntry(sessionId, { role: 'assistant', text, id: messageId });
+    return pushEntry(sessionId, { role: "assistant", text, id: messageId });
   }
 
   function formatTranscript(sessionId) {
     const arr = sessionMessages.get(sessionId) ?? [];
-    const body = arr.map((e) => `${e.role}: ${e.text}`).join('\n\n');
+    const body = arr.map((e) => `${e.role}: ${e.text}`).join("\n\n");
     if (body.length <= MAX_TRANSCRIPT_CHARS) return body;
     return body.slice(body.length - MAX_TRANSCRIPT_CHARS);
   }
 
   function deriveTitle(sessionId) {
     const arr = sessionMessages.get(sessionId) ?? [];
-    const firstUser = arr.find((e) => e.role === 'user');
+    const firstUser = arr.find((e) => e.role === "user");
     if (!firstUser) return undefined;
     return firstUser.text.slice(0, MAX_TITLE_CHARS);
   }
@@ -365,12 +365,12 @@ export function createSessionCore({ agent, baseUrl: rawBaseUrl, apiToken, slug, 
     const res = await doPost(`/api/${slug}/sessions/${sessionId}/turn`, body);
     if (!res) return;
     if (!res.ok) {
-      const detail = await res.text().catch(() => '');
+      const detail = await res.text().catch(() => "");
       diag(`POST /api/${slug}/sessions/${sessionId}/turn ${res.status} body=${detail}`);
       return;
     }
     const json = await res.json().catch(() => null);
-    const lines = Array.isArray(json?.lines) ? json.lines.filter((l) => typeof l === 'string') : [];
+    const lines = Array.isArray(json?.lines) ? json.lines.filter((l) => typeof l === "string") : [];
     if (lines.length > 0) pendingLines.set(sessionId, lines);
   }
 
@@ -388,12 +388,12 @@ export function createSessionCore({ agent, baseUrl: rawBaseUrl, apiToken, slug, 
     );
     if (!res) return [];
     if (!res.ok) {
-      const detail = await res.text().catch(() => '');
+      const detail = await res.text().catch(() => "");
       diag(`POST /api/${slug}/sessions/${sessionId}/recall-hints ${res.status} body=${detail}`);
       return [];
     }
     const json = await res.json().catch(() => null);
-    return Array.isArray(json?.lines) ? json.lines.filter((l) => typeof l === 'string') : [];
+    return Array.isArray(json?.lines) ? json.lines.filter((l) => typeof l === "string") : [];
   }
 
   async function fileRecall(sessionId, cwd, candidates, timeoutMs = FILE_RECALL_TIMEOUT_MS) {
@@ -416,27 +416,27 @@ export function createSessionCore({ agent, baseUrl: rawBaseUrl, apiToken, slug, 
       const res = await doPost(path, siblings ? { path: rel, siblings } : { path: rel }, timeoutMs);
       if (!res) break;
       if (!res.ok) {
-        const detail = await res.text().catch(() => '');
+        const detail = await res.text().catch(() => "");
         diag(`POST ${path} ${res.status} body=${detail}`);
         break;
       }
       const json = await res.json().catch(() => null);
       if (json?.exhausted === true) fileRecallExhausted.add(sessionId);
       if (Array.isArray(json?.lines)) {
-        lines.push(...json.lines.filter((l) => typeof l === 'string'));
+        lines.push(...json.lines.filter((l) => typeof l === "string"));
       }
     }
     return lines;
   }
 
   async function postSubagentReport(parentSessionId, report, agentType) {
-    if (!parentSessionId || typeof report !== 'string') return false;
+    if (!parentSessionId || typeof report !== "string") return false;
     if (subAgentSessions.has(parentSessionId)) return false;
     if (!knownSessions.has(parentSessionId)) return false;
     const redacted = stripPrivateTags(report);
     if (!KEY_LEARNINGS_PHRASE.test(redacted)) return false;
     const body = { report: redacted };
-    if (typeof agentType === 'string' && agentType) body.agentType = agentType;
+    if (typeof agentType === "string" && agentType) body.agentType = agentType;
     return await rembricPost(
       `/api/${slug}/sessions/${parentSessionId}/learnings`,
       body,
