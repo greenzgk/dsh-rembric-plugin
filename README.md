@@ -57,10 +57,10 @@ Edit the `rembric` row in the profile's `cordis.patch.yml`:
 ```yaml
 - insert:
     - id: rembric
-      name: 'dsh-rembric-plugin'
+      name: "dsh-rembric-plugin"
       config:
-        serverUrl: 'http://127.0.0.1:8790'   # or REMBRIC_SERVER_URL
-        projectSlug: 'dsh-rembric-plugin'     # fallback project when no .rembric file
+        serverUrl: "http://127.0.0.1:8790" # or REMBRIC_SERVER_URL
+        projectSlug: "dsh-rembric-plugin" # fallback project when no .rembric file
 ```
 
 ## Token

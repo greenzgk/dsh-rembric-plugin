@@ -9,44 +9,41 @@
 // REMBRIC_API_TOKEN environment variable. The server URL comes from plugin config,
 // then REMBRIC_SERVER_URL, then the local default.
 
-import { createMcpClient } from './mcp-client.js';
-import { resolveProject, buildEndpoint } from './project.js';
-import { createSessionCore, underscoreToolNames as _unusedUnderscore } from './session-core.js';
-import {
-  registerRembricCommands,
-  wireFileRecall,
-  wireSubagentLearnings,
-} from './commands.js';
+import { createMcpClient } from "./mcp-client.js";
+import { resolveProject, buildEndpoint } from "./project.js";
+import { createSessionCore, underscoreToolNames as _unusedUnderscore } from "./session-core.js";
+import { registerRembricCommands, wireFileRecall, wireSubagentLearnings } from "./commands.js";
 
-export const name = 'dsh-rembric-plugin';
+export const name = "dsh-rembric-plugin";
 export const inject = [
-  'tools',
-  'systemPrompt',
-  'credentials',
-  'workingDirectory',
-  'agents',
-  'commands',
+  "tools",
+  "systemPrompt",
+  "credentials",
+  "workingDirectory",
+  "agents",
+  "commands",
 ];
 
-const CLIENT_NAME = 'rembric-dsh';
-const CREDENTIAL_KEY = 'rembric/token';
+const CLIENT_NAME = "rembric-dsh";
+const CREDENTIAL_KEY = "rembric/token";
 const DISCOVERY_TIMEOUT_MS = 10_000;
 const FAILURE_COOLDOWN_MS = 30_000;
-const DEFAULT_SERVER_URL = 'http://127.0.0.1:8790';
+const DEFAULT_SERVER_URL = "http://127.0.0.1:8790";
 
 // Rewrite dotted Rembric tool names to the underscored names DSH registers them under.
 function underscoreToolNames(text) {
-  return String(text ?? '').replace(/\b(memory|project)\.([a-z_][a-z0-9_]*)\b/g, '$1_$2');
+  return String(text ?? "").replace(/\b(memory|project)\.([a-z_][a-z0-9_]*)\b/g, "$1_$2");
 }
 
 // Recursively rewrite every "description" string in a JSON Schema so the model
 // only ever sees underscored tool names.
 function renameToolsInDescriptions(node) {
   if (Array.isArray(node)) return node.map(renameToolsInDescriptions);
-  if (node && typeof node === 'object') {
+  if (node && typeof node === "object") {
     const out = {};
     for (const [key, value] of Object.entries(node)) {
-      out[key] = key === 'description' ? underscoreToolNames(value) : renameToolsInDescriptions(value);
+      out[key] =
+        key === "description" ? underscoreToolNames(value) : renameToolsInDescriptions(value);
     }
     return out;
   }
@@ -56,9 +53,9 @@ function renameToolsInDescriptions(node) {
 function declaresSessionId(schema) {
   return Boolean(
     schema &&
-      schema.type === 'object' &&
-      schema.properties &&
-      Object.prototype.hasOwnProperty.call(schema.properties, 'sessionId'),
+    schema.type === "object" &&
+    schema.properties &&
+    Object.prototype.hasOwnProperty.call(schema.properties, "sessionId"),
   );
 }
 
@@ -66,7 +63,7 @@ function declaresSessionId(schema) {
 // a sessionId, inject the DSH session id so the server attaches the call correctly.
 function withHostSessionId(params, core, sessionId) {
   if (!core || !sessionId || !core.isRegistered(sessionId)) return params;
-  if (params && typeof params === 'object' && params.sessionId) return params;
+  if (params && typeof params === "object" && params.sessionId) return params;
   return { ...(params ?? {}), sessionId };
 }
 
@@ -75,7 +72,7 @@ function withHostSessionId(params, core, sessionId) {
 // `agent.id`, so accept either and normalize for Map lookups.
 function sessionIdOf(agent) {
   const sid = agent?.session?.id ?? agent?.id;
-  return sid ? String(sid) : '';
+  return sid ? String(sid) : "";
 }
 
 // Plain-fetch transport for the session core (same Bearer style as mcp-client).
@@ -85,10 +82,10 @@ function makePostTransport(baseUrl, apiToken) {
   return async function post(path, body, timeoutMs = 3000) {
     try {
       return await fetch(`${baseUrl}${path}`, {
-        method: 'POST',
+        method: "POST",
         headers: {
           Authorization: `Bearer ${apiToken}`,
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify(body ?? {}),
         signal: AbortSignal.timeout(timeoutMs),
@@ -101,11 +98,11 @@ function makePostTransport(baseUrl, apiToken) {
 
 // Join the text blocks of a message content array.
 function extractText(content) {
-  if (!Array.isArray(content)) return '';
+  if (!Array.isArray(content)) return "";
   return content
-    .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
+    .filter((block) => block && block.type === "text" && typeof block.text === "string")
     .map((block) => block.text)
-    .join('\n')
+    .join("\n")
     .trim();
 }
 
@@ -122,23 +119,23 @@ function extractText(content) {
 let nudgeSeq = 0;
 function makeNudgeMessage(nudgeText) {
   const id =
-    (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function'
+    (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function"
       ? globalThis.crypto.randomUUID()
-      : `rembric-${Date.now().toString(36)}-${(nudgeSeq++).toString(36)}`) + '';
+      : `rembric-${Date.now().toString(36)}-${(nudgeSeq++).toString(36)}`) + "";
   return {
     id,
-    role: 'user',
-    content: [{ type: 'text', text: underscoreToolNames(nudgeText) }],
-    source: { kind: 'rembric' },
+    role: "user",
+    content: [{ type: "text", text: underscoreToolNames(nudgeText) }],
+    source: { kind: "rembric" },
   };
 }
 
 function extractToken(record) {
-  if (!record || typeof record !== 'object') return null;
-  if (record.kind === 'grant' && record.payload && typeof record.payload.token === 'string') {
+  if (!record || typeof record !== "object") return null;
+  if (record.kind === "grant" && record.payload && typeof record.payload.token === "string") {
     return record.payload.token;
   }
-  if (record.kind === 'api-key' && typeof record.key === 'string' && record.key) {
+  if (record.kind === "api-key" && typeof record.key === "string" && record.key) {
     return record.key;
   }
   return null;
@@ -161,10 +158,10 @@ async function resolveToken(ctx) {
 }
 
 function resolveServerUrl(config) {
-  const fromConfig = config && typeof config.serverUrl === 'string' ? config.serverUrl.trim() : '';
-  if (fromConfig) return fromConfig.replace(/\/+$/, '');
+  const fromConfig = config && typeof config.serverUrl === "string" ? config.serverUrl.trim() : "";
+  if (fromConfig) return fromConfig.replace(/\/+$/, "");
   const fromEnv = process.env.REMBRIC_SERVER_URL;
-  if (fromEnv && fromEnv.trim()) return fromEnv.trim().replace(/\/+$/, '');
+  if (fromEnv && fromEnv.trim()) return fromEnv.trim().replace(/\/+$/, "");
   return DEFAULT_SERVER_URL;
 }
 
@@ -177,7 +174,7 @@ let failedAt = 0;
 async function ensureDiscovery(serverUrl, token) {
   if (discovery) return discovery;
   if (Date.now() - failedAt < FAILURE_COOLDOWN_MS) {
-    throw new Error('Rembric discovery is cooling down after a recent failure');
+    throw new Error("Rembric discovery is cooling down after a recent failure");
   }
   if (!discoveryPromise) {
     discoveryPromise = (async () => {
@@ -202,14 +199,14 @@ async function ensureDiscovery(serverUrl, token) {
 // Rembric (`memory.search`). Try the given name, then its dotted form, then its
 // underscored form, so the call works whichever convention the server uses.
 function resolveToolName(preferred) {
-  const name = String(preferred ?? '');
+  const name = String(preferred ?? "");
   const tools = discovery?.tools ?? [];
   if (tools.length === 0) return name;
   const names = new Set(tools.map((tool) => tool?.name).filter(Boolean));
   if (names.has(name)) return name;
-  const dotted = name.replace(/_/g, '.');
+  const dotted = name.replace(/_/g, ".");
   if (names.has(dotted)) return dotted;
-  const underscored = name.replace(/\./g, '_');
+  const underscored = name.replace(/\./g, "_");
   if (names.has(underscored)) return underscored;
   return name;
 }
@@ -232,14 +229,14 @@ function warnOnce(ctx, message) {
 
 function buildToolDef(tool, client, stateRef) {
   const attaches = declaresSessionId(tool.inputSchema);
-  const underscored = tool.name.replace(/\./g, '_');
+  const underscored = tool.name.replace(/\./g, "_");
   return {
     name: underscored,
     description: underscoreToolNames(tool.description ?? tool.name),
-    parameters: renameToolsInDescriptions(tool.inputSchema ?? { type: 'object', properties: {} }),
+    parameters: renameToolsInDescriptions(tool.inputSchema ?? { type: "object", properties: {} }),
     output: {
-      schema: { type: 'string' },
-      render: (_args, value) => [{ type: 'text', text: String(value ?? '') }],
+      schema: { type: "string" },
+      render: (_args, value) => [{ type: "text", text: String(value ?? "") }],
     },
     execute: async (args, exec) => {
       let finalArgs = args ?? {};
@@ -249,7 +246,7 @@ function buildToolDef(tool, client, stateRef) {
         finalArgs = withHostSessionId(finalArgs, core, sid);
       }
       const { text, isError } = await client.callTool(tool.name, finalArgs, exec.signal);
-      if (isError) throw new Error(text || 'Rembric tool returned an error');
+      if (isError) throw new Error(text || "Rembric tool returned an error");
       return text;
     },
   };
@@ -259,15 +256,12 @@ async function setupAgent(ctx, config, agent) {
   if (agentStates.has(agent)) return;
 
   // Subagent children never own a Rembric session of their own.
-  if (agent.session && agent.session.header && agent.session.header.origin === 'subagent') return;
+  if (agent.session && agent.session.header && agent.session.header.origin === "subagent") return;
 
   const serverUrl = resolveServerUrl(config);
   const token = await resolveToken(ctx);
   if (!token) {
-    warnOnce(
-      ctx,
-      'off — no token. Set the rembric/token credential or export REMBRIC_API_TOKEN.',
-    );
+    warnOnce(ctx, "off — no token. Set the rembric/token credential or export REMBRIC_API_TOKEN.");
     return;
   }
 
@@ -275,7 +269,10 @@ async function setupAgent(ctx, config, agent) {
   try {
     disc = await ensureDiscovery(serverUrl, token);
   } catch (error) {
-    warnOnce(ctx, `off — discovery failed: ${error instanceof Error ? error.message : String(error)}`);
+    warnOnce(
+      ctx,
+      `off — discovery failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return;
   }
 
@@ -299,12 +296,15 @@ async function setupAgent(ctx, config, agent) {
     return;
   }
 
-  if (resolved.mode === 'refused') {
-    warnOnce(ctx, resolved.message ?? 'off — repository could not be resolved to a project');
+  if (resolved.mode === "refused") {
+    warnOnce(ctx, resolved.message ?? "off — repository could not be resolved to a project");
     return;
   }
-  if (resolved.mode === 'unbound') {
-    warnOnce(ctx, resolved.message ?? 'repository is not bound to a project; memory off for this session');
+  if (resolved.mode === "unbound") {
+    warnOnce(
+      ctx,
+      resolved.message ?? "repository is not bound to a project; memory off for this session",
+    );
     return;
   }
 
@@ -315,7 +315,7 @@ async function setupAgent(ctx, config, agent) {
   } catch (error) {
     warnOnce(
       ctx,
-      `off — connect to project '${slug ?? 'default'}' failed: ${error instanceof Error ? error.message : String(error)}`,
+      `off — connect to project '${slug ?? "default"}' failed: ${error instanceof Error ? error.message : String(error)}`,
     );
     return;
   }
@@ -333,7 +333,7 @@ async function setupAgent(ctx, config, agent) {
   // Register the tool set and the crib-sheet on this agent's own scope.
   let fiber;
   try {
-    fiber = agent.ctx.inject(['systemPrompt', 'tools'], (scope) => {
+    fiber = agent.ctx.inject(["systemPrompt", "tools"], (scope) => {
       for (const tool of disc.tools) {
         try {
           scope.tools.register(buildToolDef(tool, client, state));
@@ -350,7 +350,7 @@ async function setupAgent(ctx, config, agent) {
       }
       if (disc.instructions) {
         scope.systemPrompt.section({
-          name: 'context:rembric',
+          name: "context:rembric",
           order: 1000,
           text: underscoreToolNames(disc.instructions),
           interpolate: false,
@@ -360,7 +360,7 @@ async function setupAgent(ctx, config, agent) {
   } catch (error) {
     warnOnce(
       ctx,
-      `off — could not register tools for '${slug ?? 'default'}': ${error instanceof Error ? error.message : String(error)}`,
+      `off — could not register tools for '${slug ?? "default"}': ${error instanceof Error ? error.message : String(error)}`,
     );
     return;
   }
@@ -452,7 +452,7 @@ export function apply(ctx, config) {
         // ignore
       }
     },
-    'rembric: slash commands',
+    "rembric: slash commands",
   );
 
   // Adopt agents that already exist when the plugin loads.
@@ -460,11 +460,11 @@ export function apply(ctx, config) {
     setupAgent(ctx, config, agent).catch(() => {});
   }
 
-  ctx.on('agent/created', async ({ agent }) => {
+  ctx.on("agent/created", async ({ agent }) => {
     await setupAgent(ctx, config, agent);
   });
 
-  ctx.on('agent/disposed', ({ agent }) => {
+  ctx.on("agent/disposed", ({ agent }) => {
     teardownAgent(ctx, agent);
   });
 
@@ -472,11 +472,11 @@ export function apply(ctx, config) {
   // Only source.kind === 'user' counts as a human prompt; synthetic injects
   // (nudges we inject ourselves, goal continuations, runtime-context) carry
   // other kinds and must never re-enter this path (feedback-loop guard).
-  ctx.on('agent/inbox/inserted', ({ agent, message }) => {
+  ctx.on("agent/inbox/inserted", ({ agent, message }) => {
     const state = agentStates.get(agent);
     if (!state || !state.core) return;
-    if (!message || message.role !== 'user') return;
-    if (!message.source || message.source.kind !== 'user') return;
+    if (!message || message.role !== "user") return;
+    if (!message.source || message.source.kind !== "user") return;
     const text = extractText(message.content);
     if (!text) return;
     const core = state.core;
@@ -505,14 +505,14 @@ export function apply(ctx, config) {
   // Branch C: durable post-commit session feed.
   // 'assistant/message' data: { turn, step, message: AssistantMessage, ... }
   // 'tool/call' data: { turn, step, callId, name, arguments }
-  ctx.on('session/event', (session, event) => {
+  ctx.on("session/event", (session, event) => {
     const state = sessionIndex.get(session.id);
     if (!state || !state.core) return;
     try {
-      if (event.type === 'assistant/message') {
+      if (event.type === "assistant/message") {
         const text = extractText(event.data?.message?.content);
         if (text) state.core.appendAssistantMessage(state.sid, text);
-      } else if (event.type === 'tool/call') {
+      } else if (event.type === "tool/call") {
         state.core.markToolUsed(state.sid);
       }
     } catch {
@@ -524,7 +524,7 @@ export function apply(ctx, config) {
   // pendingLines; they are delivered at the NEXT human prompt via nudgesForTurn
   // (takePendingLines is not exported, so there is nothing to inject here).
   // scheduleIdleFlush is independent of reportTurn's outcome.
-  ctx.on('agent/turn-stopping', ({ agent }) => {
+  ctx.on("agent/turn-stopping", ({ agent }) => {
     const state = agentStates.get(agent);
     if (!state || !state.core) return;
     try {
@@ -539,18 +539,21 @@ export function apply(ctx, config) {
     }
   });
 
-  ctx.effect(() => () => {
-    for (const state of agentStates.values()) {
-      if (state.fiber) Promise.resolve(state.fiber.dispose()).catch(() => {});
-      if (state.core) {
-        try {
-          state.core.flushAllFireAndForget();
-        } catch {
-          // ignore
+  ctx.effect(
+    () => () => {
+      for (const state of agentStates.values()) {
+        if (state.fiber) Promise.resolve(state.fiber.dispose()).catch(() => {});
+        if (state.core) {
+          try {
+            state.core.flushAllFireAndForget();
+          } catch {
+            // ignore
+          }
         }
       }
-    }
-    agentStates.clear();
-    sessionIndex.clear();
-  }, 'rembric: agent state');
+      agentStates.clear();
+      sessionIndex.clear();
+    },
+    "rembric: agent state",
+  );
 }
