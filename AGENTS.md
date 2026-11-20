@@ -14,6 +14,10 @@ Default vocabulary — `needs-triage`, `needs-info`, `ready-for-agent`, `ready-f
 
 Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
+## Commit policy
+
+Never commit with `--no-verify`. A new lint warning is fixed, or disabled at the site with an `// oxlint-disable-next-line <rule>` comment explaining why, in the same commit that introduces it. CI enforces zero warnings.
+
 <!--VITE PLUS START-->
 
 # Using Vite+, the Unified Toolchain for the Web

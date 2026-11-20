@@ -50,6 +50,7 @@ function makeFakeCtx() {
         );
     },
     emit(name, ...args) {
+      // oxlint-disable-next-line unicorn/no-useless-spread -- defensive copy: iteration stays safe if a handler mutates the handler list during emit
       for (const fn of [...(handlers.get(name) ?? [])]) fn(...args);
     },
   };
@@ -527,7 +528,9 @@ describe("[E] deps contract vs host.js phase3 (host.js:435-441)", () => {
     expect(fileRecallDepsRead.size).toBeGreaterThan(0);
     expect(learningsDepsRead.size).toBeGreaterThan(0);
     const used = new Set([...fileRecallDepsRead, ...learningsDepsRead]);
-    console.log(`  wire functions read : ${[...used].sort().join(", ")}`);
+    console.log(
+      `  wire functions read : ${[...used].sort((a, b) => a.localeCompare(b)).join(", ")}`,
+    );
     console.log(`  host.js phase3 gives: ${HOST_PROVIDES.join(", ")}`);
     const missing = [...used].filter((k) => !HOST_PROVIDES.includes(k));
     expect(missing).toEqual([]);

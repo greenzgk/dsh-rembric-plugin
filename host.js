@@ -64,7 +64,7 @@ function declaresSessionId(schema) {
 function withHostSessionId(params, core, sessionId) {
   if (!core || !sessionId || !core.isRegistered(sessionId)) return params;
   if (params && typeof params === "object" && params.sessionId) return params;
-  return { ...(params ?? {}), sessionId };
+  return { ...params, sessionId };
 }
 
 // Session id of an Agent as a plain string. The plugin keys its indexes on
