@@ -15,6 +15,7 @@ import { createMcpClient } from "./mcp-client.js";
 import { resolveProject, buildEndpoint } from "./project.js";
 import { createSessionCore, underscoreToolNames } from "./session-core.js";
 import { registerRembricCommands, wireFileRecall, wireSubagentLearnings } from "./commands.js";
+import { registerVerifyRoute } from "./verify-route.js";
 
 // Re-exported so the rewrite helpers are reachable from the host module
 // (ticket #11): session-core.js holds the single implementation.
@@ -225,9 +226,9 @@ export async function checkConnection({
   const client = createMcpClient(buildEndpoint(serverUrl, slug), trimmed, null, fetchImpl);
   const signal = AbortSignal.timeout(timeoutMs);
   try {
-    await client.initialize(signal);
+    const initResult = await client.initialize(signal);
     const tools = await client.listTools(signal);
-    return { ok: true, toolCount: tools.length };
+    return { ok: true, toolCount: tools.length, serverName: initResult?.serverInfo?.name ?? null };
   } catch (error) {
     return { ok: false, ...classifyConnectionFailure(error) };
   }
@@ -532,6 +533,7 @@ export function apply(ctx, config) {
   const disposeCommands = registerRembricCommands(ctx, phase3);
   wireFileRecall(ctx, phase3);
   wireSubagentLearnings(ctx, phase3);
+  registerVerifyRoute(ctx, { checkConnection, resolveToken });
 
   ctx.effect(
     () => () => {

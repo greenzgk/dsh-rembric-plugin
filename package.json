@@ -24,6 +24,7 @@
     "commands.js",
     "mcp-client.js",
     "project.js",
+    "verify-route.js",
     "cordis.patch.yml",
     "icon.svg",
     "README.md",
