@@ -174,7 +174,7 @@ describe("[D] checkConnection with fake transport", () => {
     return { calls, fetchImpl };
   }
   const healthyHandlers = {
-    initialize: () => okJson({ protocolVersion: "2025-06-18" }),
+    initialize: () => okJson({ protocolVersion: "2025-06-18", serverInfo: { name: "Rembric" } }),
     "notifications/initialized": () => okJson({}),
     "tools/list": () => okJson({ tools: [{ name: "memory.search" }, { name: "memory.remember" }] }),
   };
@@ -182,7 +182,7 @@ describe("[D] checkConnection with fake transport", () => {
   it("accepts a working token and reports the tool count", async () => {
     const { calls, fetchImpl } = makeFetch(healthyHandlers);
     const result = await checkConnection({ serverUrl: "http://s:1", token: "tok-1", fetchImpl });
-    expect(result).toEqual({ ok: true, toolCount: 2 });
+    expect(result).toEqual({ ok: true, toolCount: 2, serverName: "Rembric" });
     expect(calls[0].url).toBe("http://s:1/mcp");
     expect(calls[0].auth).toBe("Bearer tok-1");
   });
@@ -596,6 +596,9 @@ describe("[H] apply() wires credential commands end-to-end", () => {
       },
       agents: { list: () => [] },
       workingDirectory: { get: () => undefined },
+      // No harness services in this fake: the verify route feature-detects and
+      // stays unregistered, which is the Electron/trimmed-build case.
+      get: () => undefined,
     };
     return { ctx, registered, warnings, setCalls };
   }
