@@ -88,9 +88,10 @@ not probe — it reports the cached session state captured at setup.
 _Avoid_: Handshake, ping
 
 **Settings card**:
-The plugin's own block on the DSH settings page; it edits the server URL only,
-because anything it persists is readable by every browser that can open that
-page.
+The plugin's own block on the DSH settings page; it persists the server URL to
+config, while its token field writes only to the credential reference — never
+to config, because anything persisted to config is readable by every browser
+that can open that page.
 _Avoid_: Config form, preferences
 
 **Project slug**:

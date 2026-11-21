@@ -14,6 +14,7 @@
 //      variant B copy — while writing nothing.
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +25,12 @@ import { describe, it, expect, beforeAll } from "vite-plus/test";
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+
+// The committed bytes, captured at import time — BEFORE the rebuild below
+// overwrites them. The freshness test compares the build output against this.
+const committedSha = createHash("sha256")
+  .update(readFileSync(join(root, "client.js")))
+  .digest("hex");
 
 beforeAll(() => {
   // The build is part of the tested property: the repo's own build step must
@@ -93,6 +100,16 @@ function materialize() {
 // ---- [A] built bundle: lazy-CJS loader format -------------------------------
 
 describe("[A] built bundle: lazy-CJS loader format", () => {
+  it("the committed client.js is exactly what the build produces", () => {
+    // The committed artifact is the install fallback (lifecycle scripts can
+    // be blocked), so a stale or hand-edited committed copy must fail here
+    // rather than be silently masked by the beforeAll rebuild.
+    const builtSha = createHash("sha256")
+      .update(readFileSync(join(root, "client.js")))
+      .digest("hex");
+    expect(builtSha, "committed client.js is stale; run vp run build:client").toBe(committedSha);
+  });
+
   it("executing the bundle registers a factory under the package name without materializing it", () => {
     const bundle = readFileSync(join(root, "client.js"), "utf8");
     const loaded = [];
