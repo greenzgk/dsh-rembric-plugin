@@ -1,5 +1,5 @@
-// test/wiring.test.mjs — Vitest port of the Phase 3 event-wiring integration
-// tests for commands.js: wireFileRecall + wireSubagentLearnings.
+// test/wiring.test.mjs — the event wiring commands.js exposes: wireFileRecall
+// and wireSubagentLearnings, run against fake contexts and a real temp repo.
 //
 // Read-only w.r.t. plugin sources. Verifies:
 //  [A] wireFileRecall with a SPY core — exact call contract (event name,
@@ -12,7 +12,7 @@
 //  [D] wireSubagentLearnings with a REAL core — KEY_LEARNINGS_PHRASE gating,
 //      <private> redaction-before-gate, learnings HTTP path.
 //  [E] deps contract — every dep field the wire functions read is provided
-//      by host.js's phase3 object (host.js:435-441).
+//      by the deps object host.js builds in apply().
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
@@ -57,7 +57,7 @@ function makeFakeCtx() {
 }
 
 // ---- fake deps with access-recording Proxy ------------------------------------
-// host.js apply() builds phase3 with exactly these five fields (host.js:435-441):
+// The deps object host.js builds in apply(); this list must match it:
 const HOST_PROVIDES = [
   "getStateForAgent",
   "getStateBySession",
@@ -522,9 +522,9 @@ describe("[D] wireSubagentLearnings — real core (KEY_LEARNINGS_PHRASE gating)"
 });
 
 // ============================================================================
-// [E] deps contract vs host.js phase3
+// [E] deps contract vs the object host.js builds
 // ============================================================================
-describe("[E] deps contract vs host.js phase3 (host.js:435-441)", () => {
+describe("[E] deps contract vs the object host.js builds in apply()", () => {
   it("every dep read by the wire functions is provided by host.js", () => {
     // Guard against a vacuous pass: if sections A and C did not run (e.g. a
     // `.only`/skip/filter run targeting this test alone), both sets are empty
@@ -535,7 +535,7 @@ describe("[E] deps contract vs host.js phase3 (host.js:435-441)", () => {
     console.log(
       `  wire functions read : ${[...used].sort((a, b) => a.localeCompare(b)).join(", ")}`,
     );
-    console.log(`  host.js phase3 gives: ${HOST_PROVIDES.join(", ")}`);
+    console.log(`  host.js apply() provides: ${HOST_PROVIDES.join(", ")}`);
     const missing = [...used].filter((k) => !HOST_PROVIDES.includes(k));
     expect(missing).toEqual([]);
   });

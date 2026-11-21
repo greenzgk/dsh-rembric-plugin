@@ -1,4 +1,4 @@
-// commands.js — Phase 3 wiring for the Rembric DSH plugin.
+// commands.js — slash commands, file-linked recall and subagent learnings.
 //
 // Three pieces, all registered from host.js apply():
 //

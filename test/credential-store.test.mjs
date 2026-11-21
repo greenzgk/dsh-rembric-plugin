@@ -557,7 +557,7 @@ describe("[G] /rembric-status", () => {
   });
 });
 // ============================================================================
-// [H] apply() wires the credential commands end-to-end (real host phase3)
+// [H] apply() wires the credential commands end-to-end (real host deps)
 // ============================================================================
 describe("[H] apply() wires credential commands end-to-end", () => {
   const settle = (ms = 10) => new Promise((r) => setTimeout(r, ms));

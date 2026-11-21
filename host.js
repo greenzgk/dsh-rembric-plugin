@@ -399,7 +399,7 @@ async function setupAgent(ctx, config, agent) {
   // hold a late-bound reference to it: `core` is filled in after registration and
   // read at execute time by the auto-sessionId seam (withHostSessionId).
   const sid = agent.session.id;
-  // `cwd` and `agent` are needed by the Phase 3 wiring: file recall resolves
+  // `cwd` and `agent` are needed by the command wiring: file recall resolves
   // candidate paths against the session's working directory and injects hints
   // through the agent. Neither is ever serialized (only the client-name string
   // goes into the session-core body), so holding them here is safe.
@@ -453,7 +453,7 @@ async function setupAgent(ctx, config, agent) {
 
   state.fiber = fiber;
 
-  // Phase 2: per-agent session core (capture + auto sessionId + nudges).
+  // The per-agent session core: capture, auto sessionId and nudges.
   // The core does no fetch itself; it uses our injected post transport.
   // `agent` is passed as the client-name string (as in the upstream Pi port):
   // the core puts it verbatim into the POST /sessions body, so a raw DSH Agent
@@ -514,11 +514,11 @@ function teardownAgent(ctx, agent) {
 }
 
 export function apply(ctx, config) {
-  // Phase 3: slash commands, file-linked recall, subagent learnings.
-  // Registered once on the plugin context (commands are global); the wiring
-  // reaches per-agent state through these getters rather than importing
-  // host internals, which keeps commands.js free of the module cycle.
-  const phase3 = {
+  // The command surface: slash commands, file-linked recall, subagent
+  // learnings. Registered once on the plugin context (commands are global);
+  // the wiring reaches per-agent state through these getters rather than
+  // importing host internals, which keeps commands.js free of the module cycle.
+  const wiring = {
     getStateForAgent: (agent) => agentStates.get(agent) ?? sessionIndex.get(sessionIdOf(agent)),
     getStateBySession: (sessionId) => sessionIndex.get(sessionId),
     makeNudgeMessage,
@@ -530,12 +530,12 @@ export function apply(ctx, config) {
     serverInfo: () => resolveServerUrl(config),
   };
 
-  const disposeCommands = registerRembricCommands(ctx, phase3);
-  wireFileRecall(ctx, phase3);
-  wireSubagentLearnings(ctx, phase3);
+  const disposeCommands = registerRembricCommands(ctx, wiring);
+  wireFileRecall(ctx, wiring);
+  wireSubagentLearnings(ctx, wiring);
   // saveToken is the same closure /rembric-login writes through, so the
   // card's verify persists the token via the identical credential path.
-  registerVerifyRoute(ctx, { checkConnection, resolveToken, saveToken: phase3.saveToken });
+  registerVerifyRoute(ctx, { checkConnection, resolveToken, saveToken: wiring.saveToken });
 
   ctx.effect(
     () => () => {
