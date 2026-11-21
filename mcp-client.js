@@ -17,7 +17,7 @@ function decodeEventStream(body) {
   return null;
 }
 
-export function createMcpClient(endpoint, apiToken, fingerprint) {
+export function createMcpClient(endpoint, apiToken, fingerprint, fetchImpl = globalThis.fetch) {
   let nextId = 1;
   let protocolVersion = PROTOCOL_VERSION;
   let sessionId = null;
@@ -41,7 +41,7 @@ export function createMcpClient(endpoint, apiToken, fingerprint) {
       body.id = id;
     }
 
-    const response = await fetch(endpoint, {
+    const response = await fetchImpl(endpoint, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
@@ -51,7 +51,11 @@ export function createMcpClient(endpoint, apiToken, fingerprint) {
       sessionId = response.headers.get("mcp-session-id");
     }
     if (!response.ok) {
-      throw new Error(`Rembric MCP request failed: HTTP ${response.status}`);
+      const error = new Error(`Rembric MCP request failed: HTTP ${response.status}`);
+      // Carry the HTTP status so callers can classify the failure
+      // (rejected token / no access / no MCP endpoint) without string matching.
+      error.status = response.status;
+      throw error;
     }
     if (isNotification) return null;
 

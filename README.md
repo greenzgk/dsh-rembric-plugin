@@ -33,15 +33,21 @@ working directory.
   - `/context` — recent sessions, memories, and the review queue.
   - `/remember <text>` — save the text as a reference memory.
   - `/summary` — flush the current session summary now.
+  - `/rembric-login <token>` — save the API token to DSH's credential store
+    and verify it against the server.
+  - `/rembric-status` — show the token source, effective server, resolved
+    project, plugin mode, and tool count.
 
 ## Requirements
 
 - A running Rembric server (default `http://127.0.0.1:8790`).
-- An API token, stored as the DSH `rembric/token` credential (preferred) or
-  exported as `REMBRIC_API_TOKEN`.
+- An API token. Set it from the chat with `/rembric-login <token>` — it lands in
+  DSH's credential store under `REMBRIC_API_TOKEN` and is never shown again.
+  Exporting `REMBRIC_API_TOKEN` works as an ambient fallback; the store wins
+  when both exist.
 - A Rembric project to write to. Create one with `project_create` or the Rembric
-  UI, then point the plugin at it via `projectSlug` config, a `.rembric` file, or
-  a git repository binding.
+  UI, then point the plugin at it via a `.rembric` file, the
+  `REMBRIC_PROJECT_SLUG` env var, or a git repository binding.
 
 ## Install
 
@@ -60,13 +66,22 @@ Edit the `rembric` row in the profile's `cordis.patch.yml`:
       name: "dsh-rembric-plugin"
       config:
         serverUrl: "http://127.0.0.1:8790" # or REMBRIC_SERVER_URL
-        projectSlug: "dsh-rembric-plugin" # fallback project when no .rembric file
 ```
+
+`serverUrl` is the only live config field. The token and the project slug are
+deliberately not config — the token lives in the credential store, and the
+project is resolved per session from the working directory.
 
 ## Token
 
-Put the token in the `rembric/token` credential. The desktop GUI does not inherit
-your shell environment, so `REMBRIC_API_TOKEN` alone will not reach it unless you
-launch DSH from a terminal that has it exported.
+Set the token from the chat: `/rembric-login <token>`. It is saved to DSH's
+credential store under `REMBRIC_API_TOKEN` and verified against the server
+before the command reports success. The token is never echoed back and never
+written to the environment.
+
+An exported `REMBRIC_API_TOKEN` works as an ambient fallback, but the stored
+credential wins when both exist. The desktop GUI does not inherit your shell
+environment, so in the GUI use `/rembric-login` rather than relying on the
+export. `/rembric-status` reports where the token is coming from.
 
 See `docs/DETAIL.md` for the full behavior reference.

@@ -64,6 +64,10 @@ const HOST_PROVIDES = [
   "makeNudgeMessage",
   "resolveToolName",
   "warnOnce",
+  "resolveToken",
+  "saveToken",
+  "checkConnection",
+  "serverInfo",
 ];
 
 function makeDeps(fields) {

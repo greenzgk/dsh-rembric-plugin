@@ -5,9 +5,11 @@
 // server's usage crib-sheet into the system prompt. Project selection follows the
 // working directory (.rembric file / env / git binding), exactly like the Pi client.
 //
-// The token comes from a DSH credentials record (rembric/token) first, then the
-// REMBRIC_API_TOKEN environment variable. The server URL comes from plugin config,
-// then REMBRIC_SERVER_URL, then the local default.
+// The token is a credential reference: set it from the chat with
+// /rembric-login <token> — it lands in DSH's credential store under
+// REMBRIC_API_TOKEN. An exported REMBRIC_API_TOKEN works as an ambient fallback;
+// the store wins when both exist. The server URL comes from plugin config, then
+// REMBRIC_SERVER_URL, then the local default.
 
 import { createMcpClient } from "./mcp-client.js";
 import { resolveProject, buildEndpoint } from "./project.js";
@@ -29,7 +31,7 @@ export const inject = [
 ];
 
 const CLIENT_NAME = "rembric-dsh";
-const CREDENTIAL_KEY = "rembric/token";
+const CREDENTIAL_REF = "REMBRIC_API_TOKEN";
 const DISCOVERY_TIMEOUT_MS = 10_000;
 const FAILURE_COOLDOWN_MS = 30_000;
 const DEFAULT_SERVER_URL = "http://127.0.0.1:8790";
@@ -131,39 +133,97 @@ function makeNudgeMessage(nudgeText) {
   };
 }
 
-function extractToken(record) {
-  if (!record || typeof record !== "object") return null;
-  if (record.kind === "grant" && record.payload && typeof record.payload.token === "string") {
-    return record.payload.token;
-  }
-  if (record.kind === "api-key" && typeof record.key === "string" && record.key) {
-    return record.key;
-  }
-  return null;
-}
-
-async function readCredential(ctx) {
+// The token is a credential reference (ADR 0001): a named slot in DSH's
+// credential store, resolved through ctx.credentials with the ambient
+// environment as the fallback. The store is authoritative when it has a
+// value; an empty stored value counts as absent. The plugin never writes the
+// token back into the environment.
+export async function resolveToken(ctx, env = process.env) {
   try {
-    const record = await ctx.credentials.modifyRecord(CREDENTIAL_KEY, async () => undefined);
-    return extractToken(record);
+    const resolved = await ctx.credentials.resolve(CREDENTIAL_REF);
+    if (resolved && typeof resolved.value === "string" && resolved.value.trim()) {
+      // 'file' is the provider-managed writable store; 'env', 'project-env'
+      // and 'user-env' are all ambient layers.
+      return {
+        value: resolved.value.trim(),
+        source: resolved.source === "file" ? "store" : "env",
+      };
+    }
   } catch {
-    return null;
+    // Provider failure: treat as absent and fall through to the ambient fallback.
   }
+  const fromEnv =
+    env && typeof env.REMBRIC_API_TOKEN === "string" ? env.REMBRIC_API_TOKEN.trim() : "";
+  if (fromEnv) return { value: fromEnv, source: "env" };
+  return { value: null, source: "none" };
 }
 
-async function resolveToken(ctx) {
-  const fromRecord = await readCredential(ctx);
-  if (fromRecord) return fromRecord;
-  const fromEnv = process.env.REMBRIC_API_TOKEN;
-  return fromEnv && fromEnv.trim() ? fromEnv.trim() : null;
+// Read one plugin config field that may arrive as a plain value or wrapped in a
+// live settings value (Volatile<T> exposes .get()). Never caches: a volatile
+// field must reflect the current setting on every read.
+export function readConfigValue(value) {
+  if (value && typeof value === "object" && typeof value.get === "function") return value.get();
+  return value;
 }
 
-function resolveServerUrl(config) {
-  const fromConfig = config && typeof config.serverUrl === "string" ? config.serverUrl.trim() : "";
-  if (fromConfig) return fromConfig.replace(/\/+$/, "");
-  const fromEnv = process.env.REMBRIC_SERVER_URL;
-  if (fromEnv && fromEnv.trim()) return fromEnv.trim().replace(/\/+$/, "");
-  return DEFAULT_SERVER_URL;
+// Effective server URL and where it came from: plugin config (volatile-aware)
+// > REMBRIC_SERVER_URL > local default. Trailing slashes are stripped.
+export function resolveServerUrl(config, env = process.env) {
+  const fromConfig = String(readConfigValue(config?.serverUrl) ?? "").trim();
+  if (fromConfig) return { url: fromConfig.replace(/\/+$/, ""), origin: "config" };
+  const fromEnv = String(env?.REMBRIC_SERVER_URL ?? "").trim();
+  if (fromEnv) return { url: fromEnv.replace(/\/+$/, ""), origin: "env" };
+  return { url: DEFAULT_SERVER_URL, origin: "default" };
+}
+
+// Map any error thrown by a connection attempt onto one honest message.
+// The single shared connection check (ticket #15) and the settings card both
+// classify through here so the user always sees the same wording per failure
+// mode: rejected token / no project access / no MCP at the address / timeout /
+// unreachable host.
+export function classifyConnectionFailure(error) {
+  const status = error && typeof error === "object" ? error.status : undefined;
+  if (status === 401)
+    return { kind: "rejected-token", message: "the server rejected the token (HTTP 401)" };
+  if (status === 403)
+    return {
+      kind: "no-project-access",
+      message: "the token has no access to this project (HTTP 403)",
+    };
+  if (status === 404)
+    return { kind: "no-mcp", message: "no MCP endpoint at this address (HTTP 404)" };
+  const name = error && typeof error === "object" ? String(error.name ?? "") : "";
+  if (name === "TimeoutError" || name === "AbortError") {
+    return { kind: "timeout", message: "the server did not answer in time" };
+  }
+  return { kind: "unreachable", message: "the host could not be reached" };
+}
+
+// The single shared connection check (CONTEXT.md "Connection check"): ask the
+// Rembric server to accept the token and list its tools. /rembric-login,
+// /rembric-status and the settings card all probe through here so every
+// surface reports the same failure wording. fetchImpl is injectable so tests
+// run without a network.
+export async function checkConnection({
+  serverUrl,
+  token,
+  slug = null,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = DISCOVERY_TIMEOUT_MS,
+} = {}) {
+  const trimmed = token == null ? "" : String(token).trim();
+  if (!trimmed) {
+    return { ok: false, kind: "no-token", message: "no token is configured" };
+  }
+  const client = createMcpClient(buildEndpoint(serverUrl, slug), trimmed, null, fetchImpl);
+  const signal = AbortSignal.timeout(timeoutMs);
+  try {
+    await client.initialize(signal);
+    const tools = await client.listTools(signal);
+    return { ok: true, toolCount: tools.length };
+  } catch (error) {
+    return { ok: false, ...classifyConnectionFailure(error) };
+  }
 }
 
 // ---- global discovery cache -------------------------------------------------
@@ -259,10 +319,13 @@ async function setupAgent(ctx, config, agent) {
   // Subagent children never own a Rembric session of their own.
   if (agent.session && agent.session.header && agent.session.header.origin === "subagent") return;
 
-  const serverUrl = resolveServerUrl(config);
-  const token = await resolveToken(ctx);
+  const { url: serverUrl } = resolveServerUrl(config);
+  const { value: token } = await resolveToken(ctx);
   if (!token) {
-    warnOnce(ctx, "off — no token. Set the rembric/token credential or export REMBRIC_API_TOKEN.");
+    warnOnce(
+      ctx,
+      "off — no token. Set one with /rembric-login <token> or export REMBRIC_API_TOKEN.",
+    );
     return;
   }
 
@@ -286,9 +349,12 @@ async function setupAgent(ctx, config, agent) {
 
   let resolved;
   try {
-    const env = { ...process.env };
-    if (config && config.projectSlug) env.REMBRIC_PROJECT_SLUG = String(config.projectSlug);
-    resolved = await resolveProject({ startDir: cwd, env, serverUrl, apiToken: token });
+    resolved = await resolveProject({
+      startDir: cwd,
+      env: process.env,
+      serverUrl,
+      apiToken: token,
+    });
   } catch (error) {
     warnOnce(
       ctx,
@@ -309,7 +375,7 @@ async function setupAgent(ctx, config, agent) {
     return;
   }
 
-  const slug = resolved.slug ?? (config && config.projectSlug) ?? null;
+  const slug = resolved.slug ?? null;
   const client = createMcpClient(buildEndpoint(serverUrl, slug), token, resolved.header ?? null);
   try {
     await client.initialize(AbortSignal.timeout(DISCOVERY_TIMEOUT_MS));
@@ -329,7 +395,18 @@ async function setupAgent(ctx, config, agent) {
   // candidate paths against the session's working directory and injects hints
   // through the agent. Neither is ever serialized (only the client-name string
   // goes into the session-core body), so holding them here is safe.
-  const state = { fiber: null, client, slug, mode: resolved.mode, core: null, sid, cwd, agent };
+  const state = {
+    fiber: null,
+    client,
+    slug,
+    slugSource: resolved.source ?? null,
+    mode: resolved.mode,
+    toolCount: disc.tools.length,
+    core: null,
+    sid,
+    cwd,
+    agent,
+  };
 
   // Register the tool set and the crib-sheet on this agent's own scope.
   let fiber;
@@ -439,6 +516,10 @@ export function apply(ctx, config) {
     makeNudgeMessage,
     resolveToolName,
     warnOnce: (message) => warnOnce(ctx, message),
+    resolveToken: () => resolveToken(ctx),
+    saveToken: (token) => ctx.credentials.set(CREDENTIAL_REF, token),
+    checkConnection: (options) => checkConnection(options),
+    serverInfo: () => resolveServerUrl(config),
   };
 
   const disposeCommands = registerRembricCommands(ctx, phase3);
