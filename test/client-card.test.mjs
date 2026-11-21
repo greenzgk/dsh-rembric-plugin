@@ -4,8 +4,8 @@
 // No DOM rendering here; the visual layout is checked by hand in the harness:
 //  [A] Built bundle shape: executing client.js only REGISTERS a lazy factory
 //      under the package name via window.__ModuleLoader__.load; nothing runs
-//      until the factory is materialized, and externals (react) arrive through
-//      the factory's own require.
+//      until the factory is materialized, and externals (react and the
+//      automatic JSX runtime) arrive through the factory's own require.
 //  [B] Package contract: exports["./client"], the published files list, and
 //      the dsh.client declaration (web platform + settings-UI dependency).
 //  [C] apply() registers the card into the plugins.bundle.config slot keyed
@@ -42,6 +42,23 @@ beforeAll(() => {
 
 // ---- stubs -----------------------------------------------------------------
 
+// The bundle's externals, single-sourced here so both require fakes below
+// answer the same list: the card is React and, being authored in JSX, the
+// automatic runtime.
+const EXTERNALS = new Set(["react", "react/jsx-runtime"]);
+
+function makeFakeRequire(modules) {
+  const calls = [];
+  const require = (id) => {
+    calls.push(id);
+    if (!EXTERNALS.has(id) || !Object.hasOwn(modules, id)) {
+      throw new Error(`client bundle required an unexpected module: ${id}`);
+    }
+    return modules[id];
+  };
+  return { require, calls };
+}
+
 // Recording React: every element becomes a plain object the test can walk.
 // The live card uses hooks; the stub answers them so a direct call renders
 // the INITIAL state: useState returns the initial value with a no-op setter,
@@ -57,8 +74,9 @@ function makeReactStub() {
     calls.push(el);
     return el;
   }
-  function jsx(type, props) {
+  function jsx(type, props, key) {
     const next = { ...props };
+    if (key !== undefined) next.key = key;
     const children = "children" in next ? next.children : undefined;
     delete next.children;
     return createElement(
@@ -88,24 +106,51 @@ function textOf(node) {
   return "";
 }
 
+// A minimal document: enough for apply() to create, tag, append, and remove
+// its one style element. No DOM implementation is involved.
+function makeFakeDocument() {
+  const styles = [];
+  const head = {
+    append(node) {
+      styles.push(node);
+    },
+  };
+  const document = {
+    head,
+    createElement: (type) => ({
+      type,
+      dataset: {},
+      textContent: "",
+      remove() {
+        const index = styles.indexOf(this);
+        if (index !== -1) styles.splice(index, 1);
+      },
+    }),
+  };
+  return { document, styles };
+}
+
 // Materialize the built bundle against fake loader/require/ctx and return
-// everything the test observes.
-function materialize() {
+// everything the test observes. A document is passed into the bundle's realm
+// only when a test asks for it, so the default also covers the no-document
+// case. With `withEffect`, the fake ctx records the cleanup disposers apply()
+// registers through ctx.effect.
+function materialize(options = {}) {
   const bundle = readFileSync(join(root, "client.js"), "utf8");
   const stub = makeReactStub();
-  const requireCalls = [];
-  const fakeRequire = (id) => {
-    requireCalls.push(id);
-    if (id === "react") return stub.react;
-    if (id === "react/jsx-runtime") return stub.jsxRuntime;
-    throw new Error(`client bundle required an unexpected module: ${id}`);
-  };
+  const { require: fakeRequire, calls: requireCalls } = makeFakeRequire({
+    react: stub.react,
+    "react/jsx-runtime": stub.jsxRuntime,
+  });
   const loaded = [];
   const window = { __ModuleLoader__: { load: (def) => loaded.push(def) } };
-  vm.runInNewContext(bundle, { window });
+  const realm = { window };
+  if (options.document !== undefined) realm.document = options.document;
+  vm.runInNewContext(bundle, realm);
   const plugin = loaded[0].factory(fakeRequire);
   const injected = [];
   const registered = [];
+  const disposers = [];
   const ctx = {
     slots: {
       inject: (name, fn) => {
@@ -118,8 +163,13 @@ function materialize() {
       },
     },
   };
+  if (options.withEffect) {
+    ctx.effect = (execute) => {
+      disposers.push(execute());
+    };
+  }
   plugin.apply(ctx);
-  return { stub, requireCalls, loaded, injected, registered };
+  return { stub, requireCalls, loaded, injected, registered, disposers };
 }
 
 // ---- [A] built bundle: lazy-CJS loader format -------------------------------
@@ -138,25 +188,26 @@ describe("[A] built bundle: lazy-CJS loader format", () => {
   it("executing the bundle registers a factory under the package name without materializing it", () => {
     const bundle = readFileSync(join(root, "client.js"), "utf8");
     const loaded = [];
-    let requireCalls = 0;
     const window = { __ModuleLoader__: { load: (def) => loaded.push(def) } };
-    const fakeRequire = (id) => {
-      requireCalls += 1;
-      if (id === "react") return { createElement: () => null };
-      if (id === "react/jsx-runtime") return { jsx: () => null, jsxs: () => null };
-      throw new Error(`unexpected require: ${id}`);
-    };
+    const { require: fakeRequire, calls: requireCalls } = makeFakeRequire({
+      react: { createElement: () => null },
+      "react/jsx-runtime": {
+        jsx: () => null,
+        jsxs: () => null,
+        Fragment: Symbol.for("react.fragment"),
+      },
+    });
     vm.runInNewContext(bundle, { window });
 
     expect(loaded).toHaveLength(1);
     expect(loaded[0].id).toBe(pkg.name);
     expect(typeof loaded[0].factory).toBe("function");
     // Lazy: registration alone must not run the plugin or require anything.
-    expect(requireCalls).toBe(0);
+    expect(requireCalls).toHaveLength(0);
 
     // Materializing runs the plugin body and pulls externals via the factory's require.
     const exports = loaded[0].factory(fakeRequire);
-    expect(requireCalls).toBeGreaterThan(0);
+    expect(requireCalls.length).toBeGreaterThan(0);
     expect(exports.inject).toContain("slots");
     expect(typeof exports.apply).toBe("function");
   });
@@ -166,6 +217,37 @@ describe("[A] built bundle: lazy-CJS loader format", () => {
     expect(bundle.trimStart().startsWith("window.__ModuleLoader__.load(")).toBe(true);
     expect(bundle).not.toMatch(/^import\s/m);
     expect(bundle).not.toMatch(/^export\s/m);
+  });
+
+  it("materializes through the automatic JSX runtime", () => {
+    // A revert to createElement calls would stop requiring the runtime and
+    // pass every other rendering assertion, so pin the require itself.
+    const { requireCalls } = materialize();
+    expect(requireCalls).toContain("react/jsx-runtime");
+  });
+
+  it("embeds the card stylesheet text in the bundle instead of a .css asset", () => {
+    const bundle = readFileSync(join(root, "client.js"), "utf8");
+    // The bundler reformats the stylesheet, so pin a selector from each area
+    // of the card plus stored values, not the source's exact bytes.
+    for (const fragment of [
+      ".rembric-card {",
+      ".rembric-card .rc-head h1 {",
+      ".rembric-card .rc-dot-err {",
+      "--line: #242c3a",
+      "background: var(--err)",
+    ]) {
+      expect(bundle).toContain(fragment);
+    }
+  });
+
+  it("keeps the stylesheet in card.css, not in the card component", () => {
+    const css = readFileSync(join(root, "client", "src", "card.css"), "utf8");
+    expect(css).toContain(".rembric-card {");
+    const card = readFileSync(join(root, "client", "src", "card.tsx"), "utf8");
+    expect(card).not.toContain(".rembric-card");
+    expect(card).not.toContain("--line");
+    expect(card).not.toContain("<style>");
   });
 });
 
@@ -294,5 +376,36 @@ describe("[C] settings-slot registration and static card content", () => {
     expect(text).not.toContain("\u2713");
     expect(text).not.toContain("\u2715");
     expect(text).not.toContain("Validating");
+  });
+
+  it("renders no <style> element: apply() owns the stylesheet", () => {
+    const { stub, registered } = materialize();
+    registered[0].component({ view: "page" });
+    expect(stub.calls.filter((el) => el.type === "style")).toHaveLength(0);
+  });
+
+  it("injects one tagged <style> through ctx.effect and removes it on cleanup", () => {
+    const { document, styles } = makeFakeDocument();
+    const { disposers } = materialize({ document, withEffect: true });
+    expect(styles).toHaveLength(1);
+    expect(styles[0].dataset.plugin).toBe("dsh-rembric-plugin");
+    expect(styles[0].dataset.pluginCss).toBe("dsh-rembric-plugin/card");
+    expect(styles[0].textContent).toContain(".rembric-card");
+    // The tag's lifetime is tied to the fiber: cleanup is the effect disposer.
+    expect(disposers).toHaveLength(1);
+    disposers[0]();
+    expect(styles).toHaveLength(0);
+  });
+
+  it("appends the style directly when ctx has no effect", () => {
+    const { document, styles } = makeFakeDocument();
+    expect(() => materialize({ document })).not.toThrow();
+    expect(styles).toHaveLength(1);
+  });
+
+  it("skips style injection and still registers the card without a document", () => {
+    const { injected, registered } = materialize();
+    expect(injected).toContain("plugins.bundle.config");
+    expect(registered).toHaveLength(1);
   });
 });
