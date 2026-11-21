@@ -12,35 +12,36 @@ import { registerVerifyRoute } from "../verify-route.js";
 
 const VERIFY_PATH = "/plugins/rembric/verify";
 
-// Fake apply-context with the two services the verify route feature-detects.
-// Mirrors makeApplyCtx (credential-store.test.mjs) plus a service registry:
-// ctx.get(name) answers from the services map, and effect() actually runs its
-// fn so registration is observable.
+// Fake apply-context with the two services the verify route requires. Mirrors
+// cordis: ctx.inject(deps, callback) runs the callback only once every named
+// service is active, restarts it when one reloads, and stays pending without
+// throwing while one is missing. effect() records its disposer on the fiber
+// that is currently running, so a restart or deactivation unregisters routes.
 function makeVerifyCtx({ webServer = true, connection = true, rejection, storedToken } = {}) {
   const registeredRoutes = [];
   const warnings = [];
   const credentialWrites = [];
   const services = {};
-  if (webServer) {
-    services.webServer = {
-      register(route) {
-        registeredRoutes.push(route);
-        return () => {
-          const at = registeredRoutes.indexOf(route);
-          if (at !== -1) registeredRoutes.splice(at, 1);
-        };
-      },
-    };
-  }
-  if (connection) {
-    services.connection = { requestRejection: () => rejection };
-  }
+  const fibers = [];
+  let runningFiber = null;
+
   const ctx = {
     get: (name) => services[name],
+    inject(names, callback) {
+      const fiber = { names, callback, disposers: [], running: false };
+      fibers.push(fiber);
+      startFiber(fiber);
+      return {
+        dispose() {
+          stopFiber(fiber);
+        },
+      };
+    },
     on: () => () => {},
     emit: () => {},
     effect(fn) {
       const disposer = fn();
+      if (runningFiber && typeof disposer === "function") runningFiber.disposers.push(disposer);
       return () => {
         if (typeof disposer === "function") disposer();
       };
@@ -56,7 +57,61 @@ function makeVerifyCtx({ webServer = true, connection = true, rejection, storedT
     agents: { list: () => [] },
     workingDirectory: { get: () => undefined },
   };
-  return { ctx, registeredRoutes, warnings, credentialWrites };
+
+  // The scoped context in cordis exposes injected services as properties.
+  for (const name of ["webServer", "connection"]) {
+    Object.defineProperty(ctx, name, { get: () => services[name] });
+  }
+
+  function startFiber(fiber) {
+    if (fiber.running || !fiber.names.every((name) => services[name])) return;
+    fiber.running = true;
+    runningFiber = fiber;
+    try {
+      fiber.callback(ctx);
+    } finally {
+      runningFiber = null;
+    }
+  }
+
+  function stopFiber(fiber) {
+    if (!fiber.running) return;
+    fiber.running = false;
+    for (const dispose of fiber.disposers.splice(0)) dispose();
+  }
+
+  // Adding a service (or replacing one, as a provider reload would) restarts
+  // every fiber that names it.
+  function activate(name) {
+    services[name] =
+      name === "webServer"
+        ? {
+            register(route) {
+              registeredRoutes.push(route);
+              return () => {
+                const at = registeredRoutes.indexOf(route);
+                if (at !== -1) registeredRoutes.splice(at, 1);
+              };
+            },
+          }
+        : { requestRejection: () => rejection };
+    for (const fiber of fibers) {
+      if (!fiber.names.includes(name)) continue;
+      stopFiber(fiber);
+      startFiber(fiber);
+    }
+  }
+
+  function deactivate(name) {
+    delete services[name];
+    for (const fiber of fibers) {
+      if (fiber.names.includes(name)) stopFiber(fiber);
+    }
+  }
+
+  if (webServer) activate("webServer");
+  if (connection) activate("connection");
+  return { ctx, registeredRoutes, warnings, credentialWrites, activate, deactivate };
 }
 
 // Minimal IncomingMessage stand-in: method + headers now, body events on the
@@ -109,6 +164,37 @@ describe("verify route registration", () => {
     const { ctx, registeredRoutes } = makeVerifyCtx({ webServer: false });
     expect(() => apply(ctx, {})).not.toThrow();
     expect(verifyRoute(registeredRoutes)).toBeUndefined();
+  });
+
+  it("registers when both services become active after apply", () => {
+    const { ctx, registeredRoutes, activate } = makeVerifyCtx({
+      webServer: false,
+      connection: false,
+    });
+    apply(ctx, {});
+    expect(verifyRoute(registeredRoutes)).toBeUndefined();
+
+    activate("webServer");
+    expect(verifyRoute(registeredRoutes)).toBeUndefined();
+
+    activate("connection");
+    expect(verifyRoute(registeredRoutes)).toBeDefined();
+  });
+
+  it("unregisters the route when an injected service goes away", () => {
+    const { ctx, registeredRoutes, deactivate } = makeVerifyCtx();
+    apply(ctx, {});
+    expect(verifyRoute(registeredRoutes)).toBeDefined();
+
+    deactivate("connection");
+    expect(verifyRoute(registeredRoutes)).toBeUndefined();
+  });
+
+  it("keeps exactly one route when a service reloads", () => {
+    const { ctx, registeredRoutes, activate } = makeVerifyCtx();
+    apply(ctx, {});
+    activate("webServer");
+    expect(registeredRoutes.filter((route) => route.path === VERIFY_PATH)).toHaveLength(1);
   });
 
   it("does not register when the connection service is absent", () => {

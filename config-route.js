@@ -22,19 +22,22 @@ const CONFIG_PATH = "/plugins/rembric/config";
 const TOKEN_SOURCES = new Set(["store", "env"]);
 
 export function registerConfigRoute(ctx, deps) {
-  const webServer = ctx.get("webServer");
-  const connection = ctx.get("connection");
-  if (!webServer || !connection) return;
-
-  ctx.effect(
-    () =>
-      webServer.register({
-        kind: "exact",
-        path: CONFIG_PATH,
-        handler: (req, res) => handleConfig(ctx, deps, connection, req, res),
-      }),
-    "rembric: config route",
-  );
+  // Same injection contract as the verify route: wait for both services and
+  // let cordis restart the registration when either one reloads.
+  ctx.inject(["webServer", "connection"], (webCtx) => {
+    // The handler keeps the plugin context because saveConfig reads
+    // ctx.fiber.entry — the plugin's config entry, not the injection fiber.
+    const connection = webCtx.connection;
+    webCtx.effect(
+      () =>
+        webCtx.webServer.register({
+          kind: "exact",
+          path: CONFIG_PATH,
+          handler: (req, res) => handleConfig(ctx, deps, connection, req, res),
+        }),
+      "rembric: config route",
+    );
+  });
 }
 
 async function handleConfig(ctx, deps, connection, req, res) {

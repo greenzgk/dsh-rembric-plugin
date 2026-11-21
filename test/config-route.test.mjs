@@ -13,9 +13,10 @@ import { registerConfigRoute } from "../config-route.js";
 
 const CONFIG_PATH = "/plugins/rembric/config";
 
-// Fake apply-context with the services the route feature-detects. Mirrors the
-// makeVerifyCtx helper: ctx.get answers from a service map, effect() runs its
-// fn so registration is observable.
+// Fake apply-context with the services the route requires. Mirrors the
+// makeVerifyCtx helper: ctx.inject runs its callback once every named service
+// is active, restarts it on a reload, and effect() records the disposer on the
+// running fiber.
 function makeConfigCtx({
   webServer = true,
   connection = true,
@@ -28,28 +29,26 @@ function makeConfigCtx({
   const credentialWrites = [];
   let resolveCount = 0;
   const services = {};
-  if (webServer) {
-    services.webServer = {
-      register(route) {
-        registeredRoutes.push(route);
-        return () => {
-          const at = registeredRoutes.indexOf(route);
-          if (at !== -1) registeredRoutes.splice(at, 1);
-        };
-      },
-    };
-  }
-  if (connection) {
-    services.connection = { requestRejection: () => rejection };
-  }
-  if (configEditor !== undefined) services.configEditor = configEditor;
+  const fibers = [];
+  let runningFiber = null;
 
   const ctx = {
     get: (name) => services[name],
+    inject(names, callback) {
+      const fiber = { names, callback, disposers: [], running: false };
+      fibers.push(fiber);
+      startFiber(fiber);
+      return {
+        dispose() {
+          stopFiber(fiber);
+        },
+      };
+    },
     on: () => () => {},
     emit: () => {},
     effect(fn) {
       const disposer = fn();
+      if (runningFiber && typeof disposer === "function") runningFiber.disposers.push(disposer);
       return () => {
         if (typeof disposer === "function") disposer();
       };
@@ -69,7 +68,70 @@ function makeConfigCtx({
     workingDirectory: { get: () => undefined },
     fiber: { entry: { id: "dsh-rembric-plugin" } },
   };
-  return { ctx, registeredRoutes, warnings, credentialWrites, resolveCount: () => resolveCount };
+
+  // The scoped context in cordis exposes injected services as properties.
+  for (const name of ["webServer", "connection"]) {
+    Object.defineProperty(ctx, name, { get: () => services[name] });
+  }
+
+  function startFiber(fiber) {
+    if (fiber.running || !fiber.names.every((name) => services[name])) return;
+    fiber.running = true;
+    runningFiber = fiber;
+    try {
+      fiber.callback(ctx);
+    } finally {
+      runningFiber = null;
+    }
+  }
+
+  function stopFiber(fiber) {
+    if (!fiber.running) return;
+    fiber.running = false;
+    for (const dispose of fiber.disposers.splice(0)) dispose();
+  }
+
+  // Adding a service (or replacing one, as a provider reload would) restarts
+  // every fiber that names it.
+  function activate(name) {
+    services[name] =
+      name === "webServer"
+        ? {
+            register(route) {
+              registeredRoutes.push(route);
+              return () => {
+                const at = registeredRoutes.indexOf(route);
+                if (at !== -1) registeredRoutes.splice(at, 1);
+              };
+            },
+          }
+        : { requestRejection: () => rejection };
+    for (const fiber of fibers) {
+      if (!fiber.names.includes(name)) continue;
+      stopFiber(fiber);
+      startFiber(fiber);
+    }
+  }
+
+  function deactivate(name) {
+    delete services[name];
+    for (const fiber of fibers) {
+      if (fiber.names.includes(name)) stopFiber(fiber);
+    }
+  }
+
+  if (configEditor !== undefined) services.configEditor = configEditor;
+  if (webServer) activate("webServer");
+  if (connection) activate("connection");
+  return {
+    ctx,
+    registeredRoutes,
+    warnings,
+    credentialWrites,
+    resolveCount: () => resolveCount,
+    activate,
+    deactivate,
+  };
 }
 
 // Minimal IncomingMessage / ServerResponse stand-ins, same shape as the verify
@@ -141,6 +203,31 @@ describe("config route registration", () => {
   it("does not register when the connection service is absent", () => {
     const { registeredRoutes } = applyHost({ connection: false });
     expect(configRoute(registeredRoutes)).toBeUndefined();
+  });
+
+  it("registers when both services become active after apply", () => {
+    const harness = applyHost({ webServer: false, connection: false });
+    expect(configRoute(harness.registeredRoutes)).toBeUndefined();
+
+    harness.activate("webServer");
+    expect(configRoute(harness.registeredRoutes)).toBeUndefined();
+
+    harness.activate("connection");
+    expect(configRoute(harness.registeredRoutes)).toBeDefined();
+  });
+
+  it("unregisters the route when an injected service goes away", () => {
+    const harness = applyHost();
+    expect(configRoute(harness.registeredRoutes)).toBeDefined();
+
+    harness.deactivate("connection");
+    expect(configRoute(harness.registeredRoutes)).toBeUndefined();
+  });
+
+  it("keeps exactly one route when a service reloads", () => {
+    const harness = applyHost();
+    harness.activate("webServer");
+    expect(harness.registeredRoutes.filter((route) => route.path === CONFIG_PATH)).toHaveLength(1);
   });
 });
 
