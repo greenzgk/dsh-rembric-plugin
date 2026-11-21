@@ -18,7 +18,7 @@ interface BundleConfigSlot {
   inject(name: "plugins.bundle.config", register: () => void): void;
   register(
     opts: { name: "plugins.bundle.config"; key: string },
-    component: (props: { view: "summary" | "page"; form?: unknown }) => ReactNode,
+    component: (props: { view: "summary" | "page" }) => ReactNode,
   ): () => void;
 }
 

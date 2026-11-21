@@ -94,7 +94,7 @@ function resultMarkOf(state) {
 		tone: "fail"
 	};
 }
-/** Client-side URL sanity check before touching the config form. */
+/** Client-side URL sanity check before touching the host config route. */
 function validateServerUrl(url) {
 	if (/^https?:\/\/\S+$/.test(url.trim())) return { ok: true };
 	return {
@@ -102,47 +102,59 @@ function validateServerUrl(url) {
 		message: "That is not a URL. Expected something like http://127.0.0.1:8790"
 	};
 }
-// client/src/card.tsx
+// client/src/host-config.ts
+const CONFIG_PATH = "/plugins/rembric/config";
 const VERIFY_PATH = "/plugins/rembric/verify";
-/** Current effective server address as the host config form sees it. */
-function formServerUrl(form) {
-	const value = form?.state?.value;
-	if (value && typeof value.serverUrl === "string") return value.serverUrl;
-	return "";
+function jsonObject(value) {
+	return value !== null && typeof value === "object" ? value : null;
 }
-/** Persist the server address through the harness config form. */
-async function writeServerUrl(form, url) {
-	const f = form;
-	if (!f || typeof f.mutate !== "function") return false;
-	const ops = [{
-		op: "set",
-		path: ["serverUrl"],
-		value: url
-	}];
-	return await f.mutate(ops, f.state?.revision) === true;
+function tokenSourceOf(value) {
+	return value === "store" || value === "env" ? value : "none";
 }
-/** Map a verify-route JSON body into the decide() outcome vocabulary. */
-function outcomeFromJson(data) {
-	if (data && typeof data === "object") {
-		const d = data;
-		if (d.ok === true) {
-			const ts = d.tokenSource;
-			return {
-				type: "success",
-				tokenSource: ts === "store" || ts === "env" || ts === "none" || ts === "request" ? ts : "none"
-			};
-		}
-		if (d.ok === false) return {
-			type: "failure",
-			kind: typeof d.kind === "string" ? d.kind : "error",
-			message: typeof d.message === "string" ? d.message : "verification failed"
+/** Read the effective address and the token state; null when the route cannot answer. */
+async function fetchHostConfig(fetchImpl = fetch) {
+	try {
+		const response = await fetchImpl(CONFIG_PATH, { method: "GET" });
+		if (!response.ok) return null;
+		const data = jsonObject(await response.json().catch(() => null));
+		if (!data) return null;
+		return {
+			serverUrl: typeof data.serverUrl === "string" ? data.serverUrl : "",
+			tokenSource: tokenSourceOf(data.tokenSource),
+			hasToken: data.hasToken === true
+		};
+	} catch {
+		return null;
+	}
+}
+/**
+* Save the address through the config route. The route answers before the
+* plugin restarts, so a lost connection after this resolves is expected.
+*/
+async function saveHostConfig(serverUrl, fetchImpl = fetch) {
+	try {
+		const response = await fetchImpl(CONFIG_PATH, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ serverUrl })
+		});
+		const data = jsonObject(await response.json().catch(() => null));
+		if (response.ok && data?.ok === true) return { ok: true };
+		return {
+			ok: false,
+			message: data && typeof data.error === "string" ? data.error : "the address could not be saved"
+		};
+	} catch {
+		return {
+			ok: false,
+			message: "the address could not be saved"
 		};
 	}
-	return { type: "unavailable" };
 }
-async function postVerify(body) {
+/** Run the shared connection check; the route writes the token only on success. */
+async function verifyHostConnection(body, fetchImpl = fetch) {
 	try {
-		return outcomeFromJson(await (await fetch(VERIFY_PATH, {
+		return outcomeFromJson(await (await fetchImpl(VERIFY_PATH, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify(body)
@@ -151,9 +163,27 @@ async function postVerify(body) {
 		return { type: "unavailable" };
 	}
 }
-function initialCardState(serverUrl) {
+function outcomeFromJson(value) {
+	const data = jsonObject(value);
+	if (!data) return { type: "unavailable" };
+	if (data.ok === true) {
+		const source = data.tokenSource;
+		return {
+			type: "success",
+			tokenSource: source === "store" || source === "env" || source === "none" || source === "request" ? source : "none"
+		};
+	}
+	if (data.ok === false) return {
+		type: "failure",
+		kind: typeof data.kind === "string" ? data.kind : "error",
+		message: typeof data.message === "string" ? data.message : "verification failed"
+	};
+	return { type: "unavailable" };
+}
+// client/src/card.tsx
+function initialCardState() {
 	return {
-		serverUrl,
+		serverUrl: "",
 		tokenDraft: "",
 		tokenSource: "none",
 		connected: null,
@@ -165,27 +195,29 @@ function initialCardState(serverUrl) {
 	};
 }
 /**
-* Reads the effective server address from the config form, probes the
+* Reads the effective server address from the config route, probes the
 * stored/ambient token on open, and saves address then token through the
 * single Save button.
 */
-function RembricSettingsCard(props) {
-	const formUrl = formServerUrl(props.form);
-	const [state, setState] = (0, react.useState)(() => initialCardState(formUrl));
+function RembricSettingsCard(_props) {
+	const [state, setState] = (0, react.useState)(initialCardState);
 	const addressDirty = (0, react.useRef)(false);
 	(0, react.useEffect)(() => {
-		if (addressDirty.current) return;
-		setState((s) => s.serverUrl === formUrl ? s : {
-			...s,
-			serverUrl: formUrl
-		});
-	}, [formUrl]);
-	const probeRan = (0, react.useRef)(false);
-	(0, react.useEffect)(() => {
-		if (probeRan.current || !formUrl) return;
-		probeRan.current = true;
 		let cancelled = false;
-		postVerify({ serverUrl: formUrl }).then((outcome) => {
+		(async () => {
+			const config = await fetchHostConfig();
+			if (cancelled || !config) return;
+			const url = config.serverUrl.trim();
+			setState((cur) => addressDirty.current ? {
+				...cur,
+				tokenSource: config.tokenSource
+			} : {
+				...cur,
+				serverUrl: config.serverUrl,
+				tokenSource: config.tokenSource
+			});
+			if (!url || addressDirty.current) return;
+			const outcome = await verifyHostConnection({ serverUrl: url });
 			if (cancelled || outcome.type !== "success") return;
 			setState((cur) => {
 				if (cur.busy || cur.result !== null) return cur;
@@ -193,14 +225,14 @@ function RembricSettingsCard(props) {
 					...cur,
 					connected: true,
 					tokenSource: effectiveSource(outcome.tokenSource),
-					verifiedUrl: formUrl
+					verifiedUrl: url
 				};
 			});
-		});
+		})();
 		return () => {
 			cancelled = true;
 		};
-	}, [formUrl]);
+	}, []);
 	const save = (0, react.useCallback)(async () => {
 		const url = state.serverUrl.trim();
 		const check = validateServerUrl(url);
@@ -218,30 +250,21 @@ function RembricSettingsCard(props) {
 			errorTarget: null,
 			result: null
 		}));
-		let persisted = false;
-		try {
-			persisted = await writeServerUrl(props.form, url);
-		} catch {
-			persisted = false;
-		}
-		if (!persisted) {
+		const saved = await saveHostConfig(url);
+		if (!saved.ok) {
 			setState((s) => decide(s, {
 				type: "failure",
 				kind: "config-write",
-				message: "the address could not be saved"
+				message: saved.message
 			}));
 			return;
 		}
 		const draft = state.tokenDraft.trim();
 		const body = { serverUrl: url };
 		if (draft) body.token = draft;
-		const outcome = await postVerify(body);
+		const outcome = await verifyHostConnection(body);
 		setState((s) => decide(s, outcome));
-	}, [
-		state.serverUrl,
-		state.tokenDraft,
-		props.form
-	]);
+	}, [state.serverUrl, state.tokenDraft]);
 	const banner = bannerOf(state);
 	const mark = resultMarkOf(state);
 	const failureMessage = state.result && !state.result.ok ? state.result.message : null;

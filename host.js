@@ -16,6 +16,7 @@ import { resolveProject, buildEndpoint } from "./project.js";
 import { createSessionCore, underscoreToolNames } from "./session-core.js";
 import { registerRembricCommands, wireFileRecall, wireSubagentLearnings } from "./commands.js";
 import { registerVerifyRoute } from "./verify-route.js";
+import { registerConfigRoute } from "./config-route.js";
 
 // Re-exported so the rewrite helpers are reachable from the host module;
 // session-core.js holds the single implementation.
@@ -536,6 +537,12 @@ export function apply(ctx, config) {
   // saveToken is the same closure /rembric-login writes through, so the
   // card's verify persists the token via the identical credential path.
   registerVerifyRoute(ctx, { checkConnection, resolveToken, saveToken: wiring.saveToken });
+  // The card's server address is read from and saved through the config
+  // route; its POST answers before the config editor restarts the plugin.
+  registerConfigRoute(ctx, {
+    serverInfo: wiring.serverInfo,
+    resolveToken: wiring.resolveToken,
+  });
 
   ctx.effect(
     () => () => {

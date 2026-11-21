@@ -142,7 +142,7 @@ async function handleVerify(ctx, deps, connection, req, res) {
 // Read the request body with a hard cap. A declared content-length over the cap
 // is rejected before any bytes are read; a stream that lies about its length is
 // cut off at the cap and drained so the socket is not left stalled.
-function readJsonBody(req) {
+export function readJsonBody(req) {
   const declared = Number(req.headers?.["content-length"]);
   if (Number.isFinite(declared) && declared > MAX_VERIFY_BODY_BYTES) {
     return Promise.reject(bodyTooLarge());
@@ -178,7 +178,7 @@ function bodyTooLarge() {
   return Object.assign(new Error("request body too large"), { code: "BODY_TOO_LARGE" });
 }
 
-function sendJson(res, status, payload) {
+export function sendJson(res, status, payload) {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(payload));
 }
