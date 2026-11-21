@@ -533,7 +533,9 @@ export function apply(ctx, config) {
   const disposeCommands = registerRembricCommands(ctx, phase3);
   wireFileRecall(ctx, phase3);
   wireSubagentLearnings(ctx, phase3);
-  registerVerifyRoute(ctx, { checkConnection, resolveToken });
+  // saveToken is the same closure /rembric-login writes through, so the
+  // card's verify persists the token via the identical credential path.
+  registerVerifyRoute(ctx, { checkConnection, resolveToken, saveToken: phase3.saveToken });
 
   ctx.effect(
     () => () => {

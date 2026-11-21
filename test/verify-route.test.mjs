@@ -19,6 +19,7 @@ const VERIFY_PATH = "/plugins/rembric/verify";
 function makeVerifyCtx({ webServer = true, connection = true, rejection, storedToken } = {}) {
   const registeredRoutes = [];
   const warnings = [];
+  const credentialWrites = [];
   const services = {};
   if (webServer) {
     services.webServer = {
@@ -48,12 +49,14 @@ function makeVerifyCtx({ webServer = true, connection = true, rejection, storedT
     logger: { warn: (msg) => warnings.push(String(msg)) },
     credentials: {
       resolve: async () => (storedToken ? { value: storedToken, source: "file" } : undefined),
-      set: async () => {},
+      set: async (ref, value) => {
+        credentialWrites.push([ref, value]);
+      },
     },
     agents: { list: () => [] },
     workingDirectory: { get: () => undefined },
   };
-  return { ctx, registeredRoutes, warnings };
+  return { ctx, registeredRoutes, warnings, credentialWrites };
 }
 
 // Minimal IncomingMessage stand-in: method + headers now, body events on the
@@ -170,7 +173,7 @@ function healthyFetch(seen) {
 
 // Runs one POST through the registered handler with globalThis.fetch stubbed.
 async function postVerify(body, ctxOpts = {}, fetchImpl) {
-  const { ctx, registeredRoutes, warnings } = makeVerifyCtx(ctxOpts);
+  const { ctx, registeredRoutes, warnings, credentialWrites } = makeVerifyCtx(ctxOpts);
   apply(ctx, {});
   const req = makeReq({ body: typeof body === "string" ? body : JSON.stringify(body) });
   const res = makeRes();
@@ -181,7 +184,12 @@ async function postVerify(body, ctxOpts = {}, fetchImpl) {
   } finally {
     globalThis.fetch = prevFetch;
   }
-  return { res, warnings, payload: res.body ? JSON.parse(res.body) : null };
+  return {
+    res,
+    warnings,
+    credentialWrites,
+    payload: res.body ? JSON.parse(res.body) : null,
+  };
 }
 
 describe("verify route success", () => {
@@ -410,6 +418,75 @@ describe("verify route token secrecy", () => {
       { serverUrl: "http://memory.test" },
       { storedToken: SECRET },
       async () => httpError(401),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.body).not.toContain(SECRET);
+  });
+});
+
+// --- token persistence (ticket #18) -------------------------------------------
+
+describe("verify route token persistence", () => {
+  it("stores an explicit token that verifies, under REMBRIC_API_TOKEN", async () => {
+    const { credentialWrites } = await postVerify(
+      { serverUrl: "http://memory.test", token: "fresh-tok-2" },
+      { storedToken: "stored-tok-1" },
+      healthyFetch([]),
+    );
+    expect(credentialWrites).toEqual([["REMBRIC_API_TOKEN", "fresh-tok-2"]]);
+  });
+
+  it("never touches the store when the body carries no token", async () => {
+    const { credentialWrites } = await postVerify(
+      { serverUrl: "http://memory.test" },
+      { storedToken: "stored-tok-1" },
+      healthyFetch([]),
+    );
+    expect(credentialWrites).toEqual([]);
+  });
+
+  it("does not store an explicit token that fails verification", async () => {
+    const { credentialWrites } = await postVerify(
+      { serverUrl: "http://memory.test", token: "bad-tok" },
+      {},
+      async () => httpError(401),
+    );
+    expect(credentialWrites).toEqual([]);
+  });
+
+  it("reports a save failure as a save-failed kind and keeps the secret out of the log", async () => {
+    const SECRET = "persist-me-tok-77";
+    const { ctx, registeredRoutes, warnings } = makeVerifyCtx();
+    registerVerifyRoute(ctx, {
+      resolveToken: async () => ({ value: undefined, source: "none" }),
+      checkConnection: async () => ({ ok: true, serverName: "Rembric", toolCount: 3 }),
+      saveToken: async () => {
+        throw new Error("disk on fire while writing " + SECRET);
+      },
+    });
+    const req = makeReq({
+      body: JSON.stringify({ serverUrl: "http://memory.test", token: SECRET }),
+    });
+    const res = makeRes();
+    await verifyRoute(registeredRoutes).handler(req, res);
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({
+      ok: false,
+      kind: "save-failed",
+      message: "the token could not be saved (the host log has the reason)",
+    });
+    expect(res.body).not.toContain(SECRET);
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("disk on fire");
+    expect(warnings[0]).not.toContain(SECRET);
+  });
+
+  it("does not echo the explicit token in the success response", async () => {
+    const SECRET = "persist-me-tok-77";
+    const { res } = await postVerify(
+      { serverUrl: "http://memory.test", token: SECRET },
+      {},
+      healthyFetch([]),
     );
     expect(res.statusCode).toBe(200);
     expect(res.body).not.toContain(SECRET);

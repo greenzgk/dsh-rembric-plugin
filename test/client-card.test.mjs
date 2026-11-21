@@ -44,8 +44,11 @@ beforeAll(() => {
 // ---- stubs -----------------------------------------------------------------
 
 // Recording React: every createElement becomes a plain object the test can
-// walk. The card must be a plain function component (no hooks) so calling it
-// directly renders its element tree.
+// walk. The live card uses hooks; the stub answers them so a direct call
+// renders the INITIAL state: useState returns the initial value with a
+// no-op setter, useEffect never runs (so no fetch or timer can fire),
+// useCallback is the identity. Interaction itself is covered by the pure
+// decide() tests and the route tests, not here.
 function makeReactStub() {
   const calls = [];
   function createElement(type, props, ...children) {
@@ -53,7 +56,16 @@ function makeReactStub() {
     calls.push(el);
     return el;
   }
-  return { react: { createElement }, calls };
+  const noop = () => {};
+  const react = {
+    createElement,
+    useState: (init) => [typeof init === "function" ? init() : init, noop],
+    useEffect: () => {},
+    useCallback: (fn) => fn,
+    useRef: (init) => ({ current: init }),
+    useMemo: (fn) => fn(),
+  };
+  return { react, calls };
 }
 
 function textOf(node) {
@@ -198,29 +210,72 @@ describe("[C] settings-slot registration and static card content", () => {
     );
   });
 
-  it("keeps the token field write-only and the card writes nothing", () => {
+  it("renders without touching a form it was not asked to write", () => {
     const { stub, registered } = materialize();
-    // A form whose mutate throws: the static card must never touch it.
+    // A form whose mutate throws: rendering must never call it. The card
+    // writes only when the user presses Save.
     const poisonForm = {
       state: {},
       mutate: () => {
-        throw new Error("ticket 16 card must not write config");
+        throw new Error("card must not write config during render");
       },
     };
     const tree = registered[0].component({ view: "page", form: poisonForm });
+    expect(textOf(tree)).toContain("Not connected");
+    const buttons = stub.calls.filter((el) => el.type === "button");
+    expect(buttons).toHaveLength(1);
+  });
+
+  it("keeps the token field write-only: it shows the draft, never a stored secret", () => {
+    const { stub, registered } = materialize();
+    // A form that carries a stored token in config — the card must not
+    // surface it in the password field. The draft starts empty.
+    const form = {
+      state: {
+        status: "ready",
+        value: { serverUrl: "http://memory.test:8790", token: "leaked-tok-1" },
+        revision: 7,
+      },
+      mutate: async () => true,
+    };
+    registered[0].component({ view: "page", form });
     const inputs = stub.calls.filter((el) => el.type === "input");
     const token = inputs.find((el) => el.props.type === "password");
     const server = inputs.find((el) => el.props.type === "text");
     expect(token).toBeTruthy();
     expect(server).toBeTruthy();
-    // Write-only: the password field carries no value/defaultValue.
-    expect(token.props.value).toBeUndefined();
+    // Write-only: the password field carries the (empty) draft, never a
+    // stored value, and no defaultValue either.
+    expect(token.props.value).toBe("");
     expect(token.props.defaultValue).toBeUndefined();
-    // No save handler yet — saving is ticket 18.
+    expect(textOf({ children: [token] })).not.toContain("leaked-tok-1");
+  });
+
+  it("seeds the server field from the config form value", () => {
+    const { stub, registered } = materialize();
+    const form = {
+      state: {
+        status: "ready",
+        value: { serverUrl: "http://memory.test:8790" },
+        revision: 7,
+      },
+      mutate: async () => true,
+    };
+    registered[0].component({ view: "page", form });
+    const server = stub.calls
+      .filter((el) => el.type === "input")
+      .find((el) => el.props.type === "text");
+    expect(server.props.value).toBe("http://memory.test:8790");
+  });
+
+  it("wires the single Save button and starts idle", () => {
+    const { stub, registered } = materialize();
+    const tree = registered[0].component({ view: "page" });
     const buttons = stub.calls.filter((el) => el.type === "button");
     expect(buttons).toHaveLength(1);
-    expect(buttons[0].props.onClick).toBeUndefined();
-    // Nothing has been saved: no result mark rendered yet.
+    expect(typeof buttons[0].props.onClick).toBe("function");
+    expect(buttons[0].props.disabled).toBeFalsy();
+    // Nothing has been saved yet: no result mark rendered.
     const text = textOf(tree);
     expect(text).not.toContain("\u2713");
     expect(text).not.toContain("\u2715");
