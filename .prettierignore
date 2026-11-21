@@ -1,0 +1,3 @@
+# Generated artifact (scripts/build-client.mjs) — formatting it would
+# break byte-equality with the build output.
+client.js
