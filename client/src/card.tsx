@@ -32,39 +32,6 @@ import {
 
 const VERIFY_PATH = "/plugins/rembric/verify";
 
-// Styles scoped under .rembric-card so nothing leaks into the host settings
-// UI. They live here because the build emits a single client.js bundle with
-// no CSS side asset, so the card injects its own <style> at render.
-const CSS = `
-.rembric-card{--line:#242c3a;--text:#e7eaf0;--muted:#8b95a7;--accent:#3f7bf0;--accent-dim:#2b5bb5;--ok:#3fb950;--err:#f85149;--mono:ui-monospace,SFMono-Regular,Menlo,monospace;background:#151a23;border:1px solid var(--line);border-radius:12px;overflow:hidden;color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-.rembric-card *{box-sizing:border-box}
-.rembric-card .rc-head{padding:18px 20px 0}
-.rembric-card .rc-head h1{font-size:16px;margin:0 0 4px}
-.rembric-card .rc-head p{margin:0;color:var(--muted);font-size:12.5px}
-.rembric-card .rc-body{padding:16px 20px 20px;display:flex;flex-direction:column;gap:18px}
-.rembric-card .rc-sec{display:flex;flex-direction:column;gap:6px}
-.rembric-card .rc-sec h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0;font-weight:600}
-.rembric-card .rc-label{font-size:13px;color:var(--text);margin:0}
-.rembric-card input[type=text],.rembric-card input[type=password]{width:100%;padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:#0f141d;color:var(--text);font:13px/1.4 var(--mono);outline:none}
-.rembric-card input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(63,123,240,.18)}
-.rembric-card .rc-hint{font-size:12px;color:var(--muted);margin:0}
-.rembric-card .rc-hint code{font-family:var(--mono);font-size:11.5px;background:#0f141d;border:1px solid var(--line);border-radius:4px;padding:1px 5px}
-.rembric-card .rc-err{font-size:12px;color:var(--err);margin:0}
-.rembric-card .rc-rule{height:1px;background:var(--line);margin:0}
-.rembric-card .rc-save-row{display:flex;align-items:center;gap:12px;padding-top:2px}
-.rembric-card button{font:inherit;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;padding:8px 18px;cursor:pointer}
-.rembric-card button:hover{background:var(--accent-dim);border-color:var(--accent-dim)}
-.rembric-card button:disabled{opacity:.55;cursor:default}
-.rembric-card .rc-result{font-size:13px;display:flex;align-items:center;gap:6px}
-.rembric-card .rc-result-ok{color:var(--ok)}
-.rembric-card .rc-result-fail{color:var(--err)}
-.rembric-card .rc-result-busy{color:var(--muted)}
-.rembric-card .rc-banner{display:flex;gap:10px;align-items:flex-start;background:#0f141d;border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:13px}
-.rembric-card .rc-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);margin-top:6px;flex:none}
-.rembric-card .rc-dot-ok{background:var(--ok)}
-.rembric-card .rc-dot-err{background:var(--err)}
-`;
-
 interface ConfigFormLike {
   state?: {
     status?: string;
@@ -249,7 +216,6 @@ export function RembricSettingsCard(props: {
 
   return (
     <div className="rembric-card">
-      <style>{CSS}</style>
       <div className="rc-head">
         <h1>Rembric Plugin</h1>
         <p>Memories for the current workspace.</p>
