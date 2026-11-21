@@ -13,10 +13,11 @@ import { registerVerifyRoute } from "../verify-route.js";
 const VERIFY_PATH = "/plugins/rembric/verify";
 
 // Fake apply-context with the two services the verify route requires. Mirrors
-// cordis: ctx.inject(deps, callback) runs the callback only once every named
-// service is active, restarts it when one reloads, and stays pending without
-// throwing while one is missing. effect() records its disposer on the fiber
-// that is currently running, so a restart or deactivation unregisters routes.
+// cordis: ctx.inject(deps, callback) runs the callback with a scoped context
+// only once every named service is active, restarts it when one reloads, and
+// stays pending without throwing while one is missing. The scoped context
+// exposes the services and its effect() records the disposer on the injection
+// fiber, so a restart or deactivation unregisters routes.
 function makeVerifyCtx({ webServer = true, connection = true, rejection, storedToken } = {}) {
   const registeredRoutes = [];
   const warnings = [];
@@ -28,7 +29,15 @@ function makeVerifyCtx({ webServer = true, connection = true, rejection, storedT
   const ctx = {
     get: (name) => services[name],
     inject(names, callback) {
-      const fiber = { names, callback, disposers: [], running: false };
+      const fiber = {
+        names,
+        callback,
+        disposers: [],
+        running: false,
+        // Its own config entry, deliberately not the plugin ctx's (if any):
+        // tests can tell the two contexts apart.
+        entry: { id: "inject-fiber" },
+      };
       fibers.push(fiber);
       startFiber(fiber);
       return {
@@ -39,13 +48,7 @@ function makeVerifyCtx({ webServer = true, connection = true, rejection, storedT
     },
     on: () => () => {},
     emit: () => {},
-    effect(fn) {
-      const disposer = fn();
-      if (runningFiber && typeof disposer === "function") runningFiber.disposers.push(disposer);
-      return () => {
-        if (typeof disposer === "function") disposer();
-      };
-    },
+    effect: (fn) => recordEffect(runningFiber, fn),
     commands: { register: () => () => {} },
     logger: { warn: (msg) => warnings.push(String(msg)) },
     credentials: {
@@ -58,9 +61,28 @@ function makeVerifyCtx({ webServer = true, connection = true, rejection, storedT
     workingDirectory: { get: () => undefined },
   };
 
-  // The scoped context in cordis exposes injected services as properties.
-  for (const name of ["webServer", "connection"]) {
-    Object.defineProperty(ctx, name, { get: () => services[name] });
+  // An effect belongs to the fiber that created it, so releasing the fiber (a
+  // provider reload, deactivation, or disposal) releases the registration.
+  function recordEffect(fiber, fn) {
+    const disposer = fn();
+    if (fiber && typeof disposer === "function") fiber.disposers.push(disposer);
+    return () => {
+      if (typeof disposer === "function") disposer();
+    };
+  }
+
+  // cordis hands the injection callback a scoped context, not the plugin ctx:
+  // it exposes the injected services and carries the injection fiber.
+  function scopedContext(fiber) {
+    const scoped = {
+      get: (name) => services[name],
+      effect: (fn) => recordEffect(fiber, fn),
+      fiber,
+    };
+    for (const name of ["webServer", "connection"]) {
+      Object.defineProperty(scoped, name, { get: () => services[name] });
+    }
+    return scoped;
   }
 
   function startFiber(fiber) {
@@ -68,7 +90,7 @@ function makeVerifyCtx({ webServer = true, connection = true, rejection, storedT
     fiber.running = true;
     runningFiber = fiber;
     try {
-      fiber.callback(ctx);
+      fiber.callback(scopedContext(fiber));
     } finally {
       runningFiber = null;
     }

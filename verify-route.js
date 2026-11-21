@@ -23,8 +23,8 @@ export function registerVerifyRoute(ctx, deps) {
   // when either one reloads. If they never appear (trimmed / Electron builds)
   // the callback stays pending and nothing registers — no throw at apply time.
   ctx.inject(["webServer", "connection"], (webCtx) => {
-    // The handler keeps the plugin context: it owns ctx.logger and the
-    // config-route save path reads ctx.fiber.entry from it.
+    // The handler keeps the plugin context because that is where ctx.logger
+    // lives (the failed-save and unexpected-failure paths log through it).
     const connection = webCtx.connection;
     webCtx.effect(
       () =>
