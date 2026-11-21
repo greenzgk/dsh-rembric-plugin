@@ -226,7 +226,7 @@ describe("[A] built bundle: lazy-CJS loader format", () => {
     expect(requireCalls).toContain("react/jsx-runtime");
   });
 
-  it("embeds the card stylesheet text in the bundle instead of a .css asset", () => {
+  it("embeds the card stylesheet text in the bundle", () => {
     const bundle = readFileSync(join(root, "client.js"), "utf8");
     // The bundler reformats the stylesheet, so pin a selector from each area
     // of the card plus stored values, not the source's exact bytes.

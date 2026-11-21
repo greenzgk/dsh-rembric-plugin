@@ -29,7 +29,7 @@ interface RembricClientContext {
    * Cordis's disposable-effect hook. It is absent from a bare harness
    * context, which is why its absence must not break apply.
    */
-  effect?: (execute: () => () => void) => unknown;
+  effect?: (execute: () => () => void, label?: string) => unknown;
 }
 
 /** The plugin id stamped on the injected style element. */
@@ -60,7 +60,7 @@ function appendCardStyles(): () => void {
 function installCardStyles(ctx: RembricClientContext): void {
   if (typeof document === "undefined") return;
   if (typeof ctx.effect === "function") {
-    ctx.effect(appendCardStyles);
+    ctx.effect(appendCardStyles, "rembric: card styles");
     return;
   }
   appendCardStyles();
@@ -76,9 +76,6 @@ export const inject = ["slots"];
 export function apply(ctx: RembricClientContext): void {
   installCardStyles(ctx);
   ctx.slots.inject("plugins.bundle.config", () =>
-    ctx.slots.register(
-      { name: "plugins.bundle.config", key: "dsh-rembric-plugin" },
-      RembricSettingsCard,
-    ),
+    ctx.slots.register({ name: "plugins.bundle.config", key: PLUGIN_ID }, RembricSettingsCard),
   );
 }

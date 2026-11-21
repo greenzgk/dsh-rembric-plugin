@@ -377,7 +377,7 @@ function appendCardStyles() {
 function installCardStyles(ctx) {
 	if (typeof document === "undefined") return;
 	if (typeof ctx.effect === "function") {
-		ctx.effect(appendCardStyles);
+		ctx.effect(appendCardStyles, "rembric: card styles");
 		return;
 	}
 	appendCardStyles();
@@ -392,7 +392,7 @@ function apply(ctx) {
 	installCardStyles(ctx);
 	ctx.slots.inject("plugins.bundle.config", () => ctx.slots.register({
 		name: "plugins.bundle.config",
-		key: "dsh-rembric-plugin"
+		key: PLUGIN_ID
 	}, RembricSettingsCard));
 }
 exports.apply = apply;
