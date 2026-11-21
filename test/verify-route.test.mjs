@@ -385,6 +385,26 @@ describe("verify route token secrecy", () => {
     expect(warnings[0]).toContain("[redacted]");
   });
 
+  it("keeps the secret out of the log when the token resolver itself throws it", async () => {
+    // The resolver fails before the route ever holds the token value, so
+    // string-redaction cannot help — the resolver's own message must not
+    // reach the warning log at all.
+    const { ctx, registeredRoutes, warnings } = makeVerifyCtx();
+    registerVerifyRoute(ctx, {
+      resolveToken: async () => {
+        throw new Error("credential store handed back raw value " + SECRET);
+      },
+      checkConnection: async () => ({ ok: true, serverName: "Rembric", toolCount: 0 }),
+    });
+    const req = makeReq({ body: JSON.stringify({ serverUrl: "http://memory.test" }) });
+    const res = makeRes();
+    await verifyRoute(registeredRoutes).handler(req, res);
+    expect(res.statusCode).toBe(500);
+    expect(res.body).not.toContain(SECRET);
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).not.toContain(SECRET);
+  });
+
   it("never echoes the token in a failure response", async () => {
     const { res } = await postVerify(
       { serverUrl: "http://memory.test" },

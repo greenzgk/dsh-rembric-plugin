@@ -76,9 +76,10 @@ environment as a fallback.
 _Avoid_: API key setting, token record
 
 **Token source**:
-Where the token came from on the last resolution — `store`, `env`, or `none`;
-`/rembric-status` reports it so a missing GUI setup is distinguishable from a
-stale shell export.
+Where the token came from on the last resolution — `store`, `env`, `none`, or
+`request` (carried in the verify request itself and probed without saving);
+`/rembric-status` reports the first three so a missing GUI setup is
+distinguishable from a stale shell export.
 _Avoid_: Origin, provider
 
 **Connection check**:

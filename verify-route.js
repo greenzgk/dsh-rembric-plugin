@@ -64,12 +64,21 @@ async function handleVerify(ctx, deps, connection, req, res) {
     const requestToken = typeof body.token === "string" ? body.token.trim() : "";
     let token = requestToken;
     let tokenSource = "request";
+    activeToken = token;
     if (!token) {
-      const resolved = await deps.resolveToken(ctx);
+      // The resolver can fail before the route ever holds the token value, and
+      // its error text may carry the stored secret — with no value to redact
+      // against, the failure is reported as a fixed diagnostic instead.
+      let resolved;
+      try {
+        resolved = await deps.resolveToken(ctx);
+      } catch {
+        throw new Error("token resolution failed");
+      }
       token = resolved.value ?? "";
       tokenSource = resolved.source;
+      activeToken = token;
     }
-    activeToken = token;
 
     const result = await deps.checkConnection({ serverUrl, token });
     if (result.ok) {
