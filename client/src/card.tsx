@@ -11,7 +11,14 @@
 //   write current address: form.mutate([{op:"set", path:["serverUrl"], value}], rev)
 // The token never enters config: the password field holds only the user's
 // draft, which is sent to the verify route and persisted host-side.
-import * as React from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactElement,
+} from "react";
 
 import {
   bannerOf,
@@ -22,9 +29,6 @@ import {
   type CardState,
   type VerifyOutcome,
 } from "./decide";
-
-const h = React.createElement;
-const { useCallback, useEffect, useRef, useState } = React;
 
 const VERIFY_PATH = "/plugins/rembric/verify";
 
@@ -145,7 +149,7 @@ function initialCardState(serverUrl: string): CardState {
 export function RembricSettingsCard(props: {
   view: "summary" | "page";
   form?: unknown;
-}): React.ReactElement {
+}): ReactElement {
   const formUrl = formServerUrl(props.form);
   const [state, setState] = useState<CardState>(() => initialCardState(formUrl));
   // Once the user edits the address field, stop adopting the form value
@@ -231,7 +235,7 @@ export function RembricSettingsCard(props: {
 
   const bannerHint =
     state.connected === true
-      ? `Token source: ${state.tokenSource} \u00b7 ${state.verifiedUrl}`
+      ? `Token source: ${state.tokenSource} · ${state.verifiedUrl}`
       : state.stored
         ? "Saved. The verify route was unreachable, so the connection was not checked."
         : "Set the server URL and a token below, then save.";
@@ -243,86 +247,78 @@ export function RembricSettingsCard(props: {
         ? "rc-dot rc-dot-err"
         : "rc-dot";
 
-  return h(
-    "div",
-    { className: "rembric-card" },
-    h("style", null, CSS),
-    h(
-      "div",
-      { className: "rc-head" },
-      h("h1", null, "Rembric Plugin"),
-      h("p", null, "Memories for the current workspace."),
-    ),
-    h(
-      "div",
-      { className: "rc-body" },
-      h(
-        "div",
-        { className: "rc-banner" },
-        h("span", { className: dotClass }),
-        h("div", null, h("b", null, banner.label), h("p", { className: "rc-hint" }, bannerHint)),
-      ),
-      h(
-        "div",
-        { className: "rc-sec" },
-        h("h2", null, "Server"),
-        h(
-          "label",
-          { className: "rc-label", htmlFor: "rembric-server-input" },
-          "Rembric server URL",
-        ),
-        h("input", {
-          id: "rembric-server-input",
-          type: "text",
-          spellCheck: false,
-          value: state.serverUrl,
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
-            addressDirty.current = true;
-            const v = e.target.value;
-            setState((s) => ({ ...s, serverUrl: v }));
-          },
-        }),
-        state.errorTarget === "server" && failureMessage
-          ? h("p", { className: "rc-err" }, failureMessage)
-          : null,
-        h("p", { className: "rc-hint" }, "Where the plugin sends and looks up memory."),
-      ),
-      h(
-        "div",
-        { className: "rc-sec" },
-        h("h2", null, "Token"),
-        h("label", { className: "rc-label", htmlFor: "rembric-token-input" }, "API token"),
-        h("input", {
-          id: "rembric-token-input",
-          type: "password",
-          spellCheck: false,
-          autoComplete: "off",
-          value: state.tokenDraft,
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
-            const v = e.target.value;
-            setState((s) => ({ ...s, tokenDraft: v }));
-          },
-        }),
-        state.errorTarget === "token" && failureMessage
-          ? h("p", { className: "rc-err" }, failureMessage)
-          : null,
-        h(
-          "p",
-          { className: "rc-hint" },
-          "Same token can also be set with ",
-          h("code", null, "/rembric-login <token>"),
-          " in the chat; both paths write the same reference.",
-        ),
-      ),
-      h("div", { className: "rc-rule" }),
-      h(
-        "div",
-        { className: "rc-save-row" },
-        h("button", { type: "button", disabled: state.busy, onClick: () => void save() }, "Save"),
-        mark
-          ? h("span", { className: `rc-result rc-result-${mark.tone}` }, mark.text)
-          : h("span", { className: "rc-result" }),
-      ),
-    ),
+  return (
+    <div className="rembric-card">
+      <style>{CSS}</style>
+      <div className="rc-head">
+        <h1>Rembric Plugin</h1>
+        <p>Memories for the current workspace.</p>
+      </div>
+      <div className="rc-body">
+        <div className="rc-banner">
+          <span className={dotClass} />
+          <div>
+            <b>{banner.label}</b>
+            <p className="rc-hint">{bannerHint}</p>
+          </div>
+        </div>
+        <div className="rc-sec">
+          <h2>Server</h2>
+          <label className="rc-label" htmlFor="rembric-server-input">
+            Rembric server URL
+          </label>
+          <input
+            id="rembric-server-input"
+            type="text"
+            spellCheck={false}
+            value={state.serverUrl}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => {
+              addressDirty.current = true;
+              const v = e.target.value;
+              setState((s) => ({ ...s, serverUrl: v }));
+            }}
+          />
+          {state.errorTarget === "server" && failureMessage ? (
+            <p className="rc-err">{failureMessage}</p>
+          ) : null}
+          <p className="rc-hint">Where the plugin sends and looks up memory.</p>
+        </div>
+        <div className="rc-sec">
+          <h2>Token</h2>
+          <label className="rc-label" htmlFor="rembric-token-input">
+            API token
+          </label>
+          <input
+            id="rembric-token-input"
+            type="password"
+            spellCheck={false}
+            autoComplete="off"
+            value={state.tokenDraft}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => {
+              const v = e.target.value;
+              setState((s) => ({ ...s, tokenDraft: v }));
+            }}
+          />
+          {state.errorTarget === "token" && failureMessage ? (
+            <p className="rc-err">{failureMessage}</p>
+          ) : null}
+          <p className="rc-hint">
+            Same token can also be set with <code>/rembric-login &lt;token&gt;</code> in the chat;
+            both paths write the same reference.
+          </p>
+        </div>
+        <div className="rc-rule" />
+        <div className="rc-save-row">
+          <button type="button" disabled={state.busy} onClick={() => void save()}>
+            Save
+          </button>
+          {mark ? (
+            <span className={`rc-result rc-result-${mark.tone}`}>{mark.text}</span>
+          ) : (
+            <span className="rc-result" />
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

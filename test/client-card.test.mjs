@@ -42,18 +42,30 @@ beforeAll(() => {
 
 // ---- stubs -----------------------------------------------------------------
 
-// Recording React: every createElement becomes a plain object the test can
-// walk. The live card uses hooks; the stub answers them so a direct call
-// renders the INITIAL state: useState returns the initial value with a
-// no-op setter, useEffect never runs (so no fetch or timer can fire),
-// useCallback is the identity. Interaction itself is covered by the pure
-// decide() tests and the route tests, not here.
+// Recording React: every element becomes a plain object the test can walk.
+// The live card uses hooks; the stub answers them so a direct call renders
+// the INITIAL state: useState returns the initial value with a no-op setter,
+// useEffect never runs (so no fetch or timer can fire), useCallback is the
+// identity. Interaction itself is covered by the pure decide() tests and the
+// route tests, not here. The card is authored in JSX on the automatic
+// runtime, so the stub answers "react/jsx-runtime" with jsx/jsxs/Fragment and
+// folds children into the same shape createElement produced.
 function makeReactStub() {
   const calls = [];
   function createElement(type, props, ...children) {
     const el = { type, props: props ?? {}, children: children.flat(Infinity) };
     calls.push(el);
     return el;
+  }
+  function jsx(type, props) {
+    const next = { ...props };
+    const children = "children" in next ? next.children : undefined;
+    delete next.children;
+    return createElement(
+      type,
+      next,
+      ...(Array.isArray(children) ? children : children === undefined ? [] : [children]),
+    );
   }
   const noop = () => {};
   const react = {
@@ -64,7 +76,8 @@ function makeReactStub() {
     useRef: (init) => ({ current: init }),
     useMemo: (fn) => fn(),
   };
-  return { react, calls };
+  const jsxRuntime = { jsx, jsxs: jsx, Fragment: Symbol.for("react.fragment") };
+  return { react, jsxRuntime, calls };
 }
 
 function textOf(node) {
@@ -84,6 +97,7 @@ function materialize() {
   const fakeRequire = (id) => {
     requireCalls.push(id);
     if (id === "react") return stub.react;
+    if (id === "react/jsx-runtime") return stub.jsxRuntime;
     throw new Error(`client bundle required an unexpected module: ${id}`);
   };
   const loaded = [];
@@ -129,6 +143,7 @@ describe("[A] built bundle: lazy-CJS loader format", () => {
     const fakeRequire = (id) => {
       requireCalls += 1;
       if (id === "react") return { createElement: () => null };
+      if (id === "react/jsx-runtime") return { jsx: () => null, jsxs: () => null };
       throw new Error(`unexpected require: ${id}`);
     };
     vm.runInNewContext(bundle, { window });
