@@ -115,10 +115,7 @@ function resultMarkOf(state) {
 		tone: "fail"
 	};
 }
-/**
-* Client-side URL sanity check before touching the config form.
-* Rejection copy is the approved prototype string.
-*/
+/** Client-side URL sanity check before touching the config form. */
 function validateServerUrl(url) {
 	if (/^https?:\/\/\S+$/.test(url.trim())) return { ok: true };
 	return {
@@ -220,9 +217,9 @@ function initialCardState(serverUrl) {
 	};
 }
 /**
-* The live variant B card. Reads the effective server address from the
-* config form, probes the stored/ambient token on open, and saves address
-* then token through the single Save button.
+* Reads the effective server address from the config form, probes the
+* stored/ambient token on open, and saves address then token through the
+* single Save button.
 */
 function RembricSettingsCard(props) {
 	const formUrl = formServerUrl(props.form);
@@ -344,8 +341,8 @@ function RembricSettingsCard(props) {
 /** Shell modules this half needs; "slots" is the UI slot registry. */
 const inject = ["slots"];
 /**
-* Register the static variant B card into the bundle's configuration slot,
-* keyed by this package's name so the Plugins page renders it on our page.
+* Register the settings card into the bundle's configuration slot, keyed by
+* this package's name so the Plugins page renders it on our page.
 */
 function apply(ctx) {
 	ctx.slots.inject("plugins.bundle.config", () => ctx.slots.register({

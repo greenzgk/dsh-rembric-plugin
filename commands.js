@@ -291,7 +291,7 @@ async function handleSummary(deps, invocation) {
 }
 
 // /rembric-login <token> — save the token to the credential store, then
-// verify it against the server BEFORE reporting success (ticket #15). The
+// verify it against the server BEFORE reporting success. The
 // token is never echoed back in any reply. On a failed check the token stays
 // saved but the failure is reported with the shared classifier wording.
 async function handleLogin(deps, invocation) {

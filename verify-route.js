@@ -1,4 +1,4 @@
-// verify-route.js — the settings card's server-side verify endpoint (ticket #17).
+// The settings card's server-side verify endpoint.
 //
 // POST /plugins/rembric/verify answers { serverUrl, token? } with a live probe
 // of the Rembric server: on success the server name, the tool count, and where

@@ -17,8 +17,8 @@ import { createSessionCore, underscoreToolNames } from "./session-core.js";
 import { registerRembricCommands, wireFileRecall, wireSubagentLearnings } from "./commands.js";
 import { registerVerifyRoute } from "./verify-route.js";
 
-// Re-exported so the rewrite helpers are reachable from the host module
-// (ticket #11): session-core.js holds the single implementation.
+// Re-exported so the rewrite helpers are reachable from the host module;
+// session-core.js holds the single implementation.
 export { underscoreToolNames };
 
 export const name = "dsh-rembric-plugin";
@@ -184,7 +184,7 @@ export function resolveServerUrl(config, env = process.env) {
 }
 
 // Map any error thrown by a connection attempt onto one honest message.
-// The single shared connection check (ticket #15) and the settings card both
+// The single shared connection check and the settings card both
 // classify through here so the user always sees the same wording per failure
 // mode: rejected token / no project access / no MCP at the address / timeout /
 // unreachable host.

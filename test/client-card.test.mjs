@@ -1,8 +1,7 @@
-// test/client-card.test.mjs — Ticket 16: the client half's built artifact and
-// its settings-slot registration.
+// test/client-card.test.mjs — the client half's built artifact and its
+// settings-slot registration.
 //
-// Seams (per spec #14 — no DOM rendering; the visual layout is checked by
-// hand against approved prototype variant B):
+// No DOM rendering here; the visual layout is checked by hand in the harness:
 //  [A] Built bundle shape: executing client.js only REGISTERS a lazy factory
 //      under the package name via window.__ModuleLoader__.load; nothing runs
 //      until the factory is materialized, and externals (react) arrive through
@@ -10,8 +9,8 @@
 //  [B] Package contract: exports["./client"], the published files list, and
 //      the dsh.client declaration (web platform + settings-UI dependency).
 //  [C] apply() registers the card into the plugins.bundle.config slot keyed
-//      by the package name, and the card's element tree carries the approved
-//      variant B copy — while writing nothing.
+//      by the package name, and the card's element tree carries the expected
+//      copy — while writing nothing.
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -186,7 +185,7 @@ describe("[C] settings-slot registration and static card content", () => {
     expect(typeof registered[0].component).toBe("function");
   });
 
-  it("renders the approved variant B copy", () => {
+  it("renders the card copy", () => {
     const { registered } = materialize();
     const tree = registered[0].component({ view: "page" });
     const text = textOf(tree);
@@ -204,7 +203,7 @@ describe("[C] settings-slot registration and static card content", () => {
     ]) {
       expect(text).toContain(s);
     }
-    // The token hint verbatim from the ticket / prototype.
+    // The full token hint text.
     expect(text).toContain(
       "Same token can also be set with /rembric-login <token> in the chat; both paths write the same reference.",
     );

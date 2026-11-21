@@ -1,14 +1,13 @@
-// test/credential-store.test.mjs — Ticket #15: token from the credential store.
+// test/credential-store.test.mjs — token from the credential store.
 //
-// Covers the host-side seams agreed in spec #14:
+// Covers the host-side behavior:
 //   [A]/[B] pure config helpers (config-field read incl. Volatile unwrap, URL precedence)
 //   [C]     connection-failure classification (pure)
 //   [D]     connection check with a fake transport
 //   [E]     token resolution through a fake ctx (store > env > none)
 //   [F]/[G] /rembric-login and /rembric-status command behavior via fake ctx
 //
-// Expected values are literals from the ticket/spec, never recomputed by the
-// code under test.
+// Expected values are literals, never recomputed by the code under test.
 
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

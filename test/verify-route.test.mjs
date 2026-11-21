@@ -1,6 +1,6 @@
-// test/verify-route.test.mjs — ticket #17: the settings card's verify route.
+// test/verify-route.test.mjs — the settings card's verify route.
 //
-// Seam (spec #14 seam 1, extended): host wiring under a fake context. The fake
+// Host wiring under a fake context. The fake
 // webServer records route registration, the fake connection service stubs the
 // request-rejection check, and a fake fetch stands in for the Rembric server.
 // No real network is touched anywhere in this file.
@@ -424,7 +424,7 @@ describe("verify route token secrecy", () => {
   });
 });
 
-// --- token persistence (ticket #18) -------------------------------------------
+// --- token persistence --------------------------------------------------------
 
 describe("verify route token persistence", () => {
   it("stores an explicit token that verifies, under REMBRIC_API_TOKEN", async () => {

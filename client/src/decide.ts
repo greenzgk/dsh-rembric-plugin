@@ -1,13 +1,13 @@
-// client/src/decide.ts — the pure decision core of the Rembric settings card.
+// The pure decision core of the Rembric settings card.
 //
-// Ticket #18 seam 1: every card transition is a function of (state, outcome)
-// with no DOM, no fetch and no timers, so the whole brain is testable as a
-// plain module. The card component only renders this state and feeds it
-// outcomes; the verify route produces the outcomes from the host check.
+// Every card transition is a function of (state, outcome) with no DOM, no
+// fetch and no timers, so the whole brain is testable as a plain module. The
+// card component only renders this state and feeds it outcomes; the verify
+// route produces the outcomes from the host check.
 //
-// Shape from spec #14, plus `stored`: the address was persisted but the
-// verification never ran (verify route unavailable) — the "Stored" banner
-// the ticket requires, which the spec shape alone cannot express.
+// `stored`: the address was persisted but the verification never ran (verify
+// route unavailable) — the "Stored" banner, which a connected flag alone
+// cannot express.
 
 /** Where the effective token comes from. "none" means no token anywhere. */
 export type TokenSource = "store" | "env" | "none";
@@ -99,7 +99,7 @@ export function decide(state: CardState, outcome: VerifyOutcome): CardState {
       };
     case "unavailable":
       // The address was saved but the verify route could not answer.
-      // The ticket is explicit: this must never read as Connected.
+      // This must never read as Connected.
       return {
         ...state,
         connected: false,
@@ -136,10 +136,7 @@ export function resultMarkOf(state: CardState): {
   return { text: "✕ " + state.result.message, tone: "fail" };
 }
 
-/**
- * Client-side URL sanity check before touching the config form.
- * Rejection copy is the approved prototype string.
- */
+/** Client-side URL sanity check before touching the config form. */
 export function validateServerUrl(url: string): { ok: true } | { ok: false; message: string } {
   if (/^https?:\/\/\S+$/.test(url.trim())) return { ok: true };
   return {

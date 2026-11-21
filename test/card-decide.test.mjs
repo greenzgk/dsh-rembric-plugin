@@ -1,8 +1,8 @@
-// test/card-decide.test.mjs — ticket #18 seam 1: the pure decision core.
+// test/card-decide.test.mjs — the pure decision core.
 //
 // decide(state, outcome) is the whole card brain: no DOM, no fetch, no
-// timers. Expected values come from the ticket #18 acceptance list and
-// spec #14, not from the implementation.
+// timers. Expected values are the card's contract, not values recomputed by
+// the implementation.
 import { describe, it, expect } from "vite-plus/test";
 
 import { decide, bannerOf, resultMarkOf, validateServerUrl } from "../client/src/decide.ts";
@@ -57,8 +57,8 @@ describe("decide: success", () => {
 
 describe("decide: empty token draft verifies the stored token", () => {
   it("an empty draft verifying successfully keeps the stored source and erases nothing", () => {
-    // AC 9: empty token = verify stored. The draft was and stays empty;
-    // the stored token's source survives the round-trip untouched.
+    // An empty token draft verifies the stored token. The draft was and
+    // stays empty; the stored source survives the round-trip untouched.
     const next = decide(freshState({ tokenDraft: "", tokenSource: "store" }), {
       type: "success",
       tokenSource: "store",
@@ -238,7 +238,7 @@ describe("validateServerUrl", () => {
     expect(validateServerUrl("https://rembric.example.com")).toEqual({ ok: true });
   });
 
-  it("rejects anything that is not an http(s) URL with the prototype copy", () => {
+  it("rejects anything that is not an http(s) URL with the fixed copy", () => {
     expect(validateServerUrl("not a url")).toEqual({
       ok: false,
       message: "That is not a URL. Expected something like http://127.0.0.1:8790",

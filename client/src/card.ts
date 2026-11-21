@@ -1,10 +1,9 @@
-// client/src/card.ts — the Rembric settings card, live stage (ticket #18).
+// The Rembric settings card: server URL and write-only token fields, a stored
+// token probe on open, and one Save action for both.
 //
-// Approved layout: prototype variant B "Status first" — unchanged DOM order;
-// only the logic landed here. The card is a thin shell: every transition goes
-// through the pure decide() in ./decide (seam 1, tested without DOM). This
-// file only reads the harness config form, presses buttons, and talks to the
-// host verify route.
+// The card is a thin shell: every transition goes through the pure decide() in
+// ./decide, which is tested without a DOM. This file only reads the harness
+// config form, presses buttons, and talks to the host verify route.
 //
 // Form contract (dsh-client-ui-plugin-manager / dsh-client-ui-settings):
 //   props.form = { state: { status, value, revision, ... }, mutate(ops, rev) }
@@ -29,8 +28,9 @@ const { useCallback, useEffect, useRef, useState } = React;
 
 const VERIFY_PATH = "/plugins/rembric/verify";
 
-// Variant B styles, scoped under .rembric-card so nothing leaks into the
-// host settings UI. Values mirror the approved prototype.
+// Styles scoped under .rembric-card so nothing leaks into the host settings
+// UI. They live here because the build emits a single client.js bundle with
+// no CSS side asset, so the card injects its own <style> at render.
 const CSS = `
 .rembric-card{--line:#242c3a;--text:#e7eaf0;--muted:#8b95a7;--accent:#3f7bf0;--accent-dim:#2b5bb5;--ok:#3fb950;--err:#f85149;--mono:ui-monospace,SFMono-Regular,Menlo,monospace;background:#151a23;border:1px solid var(--line);border-radius:12px;overflow:hidden;color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 .rembric-card *{box-sizing:border-box}
@@ -138,9 +138,9 @@ function initialCardState(serverUrl: string): CardState {
 }
 
 /**
- * The live variant B card. Reads the effective server address from the
- * config form, probes the stored/ambient token on open, and saves address
- * then token through the single Save button.
+ * Reads the effective server address from the config form, probes the
+ * stored/ambient token on open, and saves address then token through the
+ * single Save button.
  */
 export function RembricSettingsCard(props: {
   view: "summary" | "page";
