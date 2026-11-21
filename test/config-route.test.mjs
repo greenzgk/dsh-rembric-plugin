@@ -269,6 +269,15 @@ describe("POST /plugins/rembric/config", () => {
     expect(payload(res).error).toMatch(/configuration editor/i);
   });
 
+  it("answers 501 before reading or validating the body when the config editor is absent", async () => {
+    const harness = applyHost();
+    for (const body of ["{", JSON.stringify({ serverUrl: "not a url" })]) {
+      const res = await request(harness.registeredRoutes, { method: "POST", body });
+      expect(res.statusCode).toBe(501);
+      expect(payload(res).error).toMatch(/configuration editor/i);
+    }
+  });
+
   it("answers 400 for a blank address and saves nothing", async () => {
     const edits = [];
     const configEditor = {

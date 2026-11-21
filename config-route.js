@@ -15,7 +15,7 @@
 
 import { readJsonBody, sendJson } from "./verify-route.js";
 
-export const CONFIG_PATH = "/plugins/rembric/config";
+const CONFIG_PATH = "/plugins/rembric/config";
 
 // Sources the connection check reports. "request" (a token typed into the
 // card) never applies here because this route does not touch the token.
@@ -79,6 +79,16 @@ async function resolveTokenForCard(ctx, deps) {
 }
 
 async function saveConfig(ctx, req, res) {
+  // Check the editor before touching the body: a host without one must answer
+  // 501 for any POST, valid or not, or the card would show a misleading 400.
+  const configEditor = ctx.get("configEditor");
+  if (!configEditor || typeof configEditor.edit !== "function") {
+    sendJson(res, 501, {
+      error: "the host has no configuration editor, so the server URL cannot be saved",
+    });
+    return;
+  }
+
   let body;
   try {
     body = await readJsonBody(req);
@@ -108,14 +118,6 @@ async function saveConfig(ctx, req, res) {
     return;
   }
 
-  const configEditor = ctx.get("configEditor");
-  if (!configEditor || typeof configEditor.edit !== "function") {
-    sendJson(res, 501, {
-      error: "the host has no configuration editor, so the server URL cannot be saved",
-    });
-    return;
-  }
-
   // Answer first: the edit restarts the plugin.
   sendJson(res, 200, { ok: true, serverUrl });
   try {
@@ -126,8 +128,8 @@ async function saveConfig(ctx, req, res) {
   }
 }
 
-// Same normalization the host applies when it reads the address: trim the
-// trailing slashes and accept only http(s).
+// Stricter than resolveServerUrl in host.js: the host read path only trims and
+// strips trailing slashes, while a saved address must also be an http(s) URL.
 function normalizeServerUrl(raw) {
   const trimmed = raw.replace(/\/+$/, "");
   let parsed;

@@ -68,6 +68,10 @@ Edit the `rembric` row in the profile's `cordis.patch.yml`:
         serverUrl: "http://127.0.0.1:8790" # or REMBRIC_SERVER_URL
 ```
 
+The settings card reads the effective address from `/plugins/rembric/config`
+and saves a new one there through the config editor; hand-editing this row
+still works for defaults.
+
 `serverUrl` is the only live config field. The token and the project slug are
 deliberately not config — the token lives in the credential store, and the
 project is resolved per session from the working directory.
