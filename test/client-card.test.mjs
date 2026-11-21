@@ -60,13 +60,14 @@ function makeFakeRequire(modules) {
 }
 
 // Recording React: every element becomes a plain object the test can walk.
-// The live card uses hooks; the stub answers them so a direct call renders
-// the INITIAL state: useState returns the initial value with a no-op setter,
-// useEffect never runs (so no fetch or timer can fire), useCallback is the
-// identity. Interaction itself is covered by the pure decide() tests and the
-// route tests, not here. The card is authored in JSX on the automatic
-// runtime, so the stub answers "react/jsx-runtime" with jsx/jsxs/Fragment and
-// folds children into the same shape createElement produced.
+// By default the hooks are inert, so a direct component call renders the
+// INITIAL state: useState returns the initial value with a no-op setter,
+// useEffect never runs, useCallback is the identity. That keeps the copy and
+// registration tests deterministic. mount() swaps in the small hooks runtime
+// below for the interaction tests, where effects and rerenders are needed.
+// The card is authored in JSX on the automatic runtime, so the stub answers
+// "react/jsx-runtime" with jsx/jsxs/Fragment and folds children into the same
+// shape createElement produced.
 function makeReactStub() {
   const calls = [];
   function createElement(type, props, ...children) {
@@ -86,16 +87,129 @@ function makeReactStub() {
     );
   }
   const noop = () => {};
+  let hooks = null;
   const react = {
     createElement,
-    useState: (init) => [typeof init === "function" ? init() : init, noop],
-    useEffect: () => {},
-    useCallback: (fn) => fn,
-    useRef: (init) => ({ current: init }),
-    useMemo: (fn) => fn(),
+    useState: (init) =>
+      hooks ? hooks.useState(init) : [typeof init === "function" ? init() : init, noop],
+    useEffect: (...args) => (hooks ? hooks.useEffect(...args) : undefined),
+    useCallback: (fn) => (hooks ? hooks.useCallback(fn) : fn),
+    useRef: (init) => (hooks ? hooks.useRef(init) : { current: init }),
+    useMemo: (fn) => (hooks ? hooks.useMemo(fn) : fn()),
   };
   const jsxRuntime = { jsx, jsxs: jsx, Fragment: Symbol.for("react.fragment") };
-  return { react, jsxRuntime, calls };
+  return {
+    react,
+    jsxRuntime,
+    calls,
+    setHooks(next) {
+      hooks = next;
+    },
+  };
+}
+
+// A tiny hooks runtime for one card instance: slot storage, dependency-aware
+// effects, and a flush() that runs effects, drains their asynchronous work
+// (the injected fetch resolves immediately), and rerenders until stable. It
+// is not a React clone; it is only as much as the card's mount/save paths use.
+function createHooksRuntime(component, props) {
+  const states = [];
+  const refs = [];
+  const effectSlots = [];
+  const queuedEffects = [];
+  let hookIndex = 0;
+  let dirty = false;
+  let element = null;
+
+  const hooks = {
+    useState(init) {
+      const index = hookIndex++;
+      if (!Object.hasOwn(states, index)) {
+        states[index] = typeof init === "function" ? init() : init;
+      }
+      const setState = (next) => {
+        const value = typeof next === "function" ? next(states[index]) : next;
+        if (Object.is(value, states[index])) return;
+        states[index] = value;
+        dirty = true;
+      };
+      return [states[index], setState];
+    },
+    useRef(init) {
+      const index = hookIndex++;
+      if (!Object.hasOwn(refs, index)) refs[index] = { current: init };
+      return refs[index];
+    },
+    useCallback(fn) {
+      hookIndex += 1;
+      return fn;
+    },
+    useMemo(fn) {
+      hookIndex += 1;
+      return fn();
+    },
+    useEffect(fn, deps) {
+      const index = hookIndex++;
+      const previous = effectSlots[index];
+      const sameDeps =
+        previous !== undefined &&
+        Array.isArray(deps) &&
+        Array.isArray(previous.deps) &&
+        deps.length === previous.deps.length &&
+        deps.every((value, i) => Object.is(value, previous.deps[i]));
+      if (sameDeps) return;
+      effectSlots[index] = { deps, cleanup: null };
+      queuedEffects.push({ index, fn });
+    },
+  };
+
+  function render() {
+    hookIndex = 0;
+    dirty = false;
+    element = component(props);
+    return element;
+  }
+
+  async function flush() {
+    for (let round = 0; round < 50; round += 1) {
+      if (dirty) render();
+      const pending = queuedEffects.splice(0);
+      for (const effect of pending) {
+        const slot = effectSlots[effect.index];
+        if (slot?.cleanup) slot.cleanup();
+        const cleanup = effect.fn();
+        if (slot) slot.cleanup = typeof cleanup === "function" ? cleanup : null;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (!dirty && queuedEffects.length === 0 && pending.length === 0) return element;
+    }
+    throw new Error("card effects did not settle");
+  }
+
+  return {
+    render,
+    flush,
+    hooks,
+    element: () => element,
+  };
+}
+
+function findNode(node, predicate) {
+  if (!node || typeof node !== "object") return null;
+  if (predicate(node)) return node;
+  for (const child of node.children ?? []) {
+    const found = findNode(child, predicate);
+    if (found) return found;
+  }
+  return null;
+}
+
+function inputById(tree, id) {
+  return findNode(tree, (node) => node.type === "input" && node.props.id === id);
+}
+
+function buttonOf(tree) {
+  return findNode(tree, (node) => node.type === "button");
 }
 
 function textOf(node) {
@@ -133,8 +247,11 @@ function makeFakeDocument() {
 // Materialize the built bundle against fake loader/require/ctx and return
 // everything the test observes. A document is passed into the bundle's realm
 // only when a test asks for it, so the default also covers the no-document
-// case. With `withEffect`, the fake ctx records the cleanup disposers apply()
-// registers through ctx.effect.
+// case. options.fetch becomes the realm's global fetch for interaction tests.
+// With `withEffect`, the fake ctx records the cleanup disposers apply()
+// registers through ctx.effect. mount() renders the registered card with the
+// live hooks runtime and returns it; tests then call flush() and read
+// element().
 function materialize(options = {}) {
   const bundle = readFileSync(join(root, "client.js"), "utf8");
   const stub = makeReactStub();
@@ -146,6 +263,7 @@ function materialize(options = {}) {
   const window = { __ModuleLoader__: { load: (def) => loaded.push(def) } };
   const realm = { window };
   if (options.document !== undefined) realm.document = options.document;
+  if (options.fetch !== undefined) realm.fetch = options.fetch;
   vm.runInNewContext(bundle, realm);
   const plugin = loaded[0].factory(fakeRequire);
   const injected = [];
@@ -169,7 +287,23 @@ function materialize(options = {}) {
     };
   }
   plugin.apply(ctx);
-  return { stub, requireCalls, loaded, injected, registered, disposers };
+  function mount(props = { view: "page" }) {
+    const component = registered[0]?.component;
+    if (typeof component !== "function") throw new Error("the card was not registered");
+    const runtime = createHooksRuntime(component, props);
+    stub.setHooks(runtime.hooks);
+    runtime.render();
+    return runtime;
+  }
+  return { stub, requireCalls, loaded, injected, registered, disposers, mount };
+}
+
+function jsonResponse(status, payload) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => payload,
+  };
 }
 
 // ---- [A] built bundle: lazy-CJS loader format -------------------------------
@@ -347,21 +481,145 @@ describe("[C] settings-slot registration and static card content", () => {
     expect(textOf({ children: [token] })).not.toContain("leaked-tok-1");
   });
 
-  it("seeds the server field from the config form value", () => {
-    const { stub, registered } = materialize();
-    const form = {
-      state: {
-        status: "ready",
-        value: { serverUrl: "http://memory.test:8790" },
-        revision: 7,
-      },
-      mutate: async () => true,
+  it("prefills the server field from the host config route, not from props.form", async () => {
+    const calls = [];
+    const fetch = async (url, init = {}) => {
+      calls.push({ url, method: init.method ?? "GET" });
+      if ((init.method ?? "GET") === "GET") {
+        return jsonResponse(200, {
+          serverUrl: "http://memory.test:8790",
+          tokenSource: "env",
+          hasToken: true,
+        });
+      }
+      return jsonResponse(200, { ok: false, kind: "no-token", message: "no token is configured" });
     };
-    registered[0].component({ view: "page", form });
-    const server = stub.calls
-      .filter((el) => el.type === "input")
-      .find((el) => el.props.type === "text");
-    expect(server.props.value).toBe("http://memory.test:8790");
+    const { mount } = materialize({ fetch });
+    // The decoy form would seed a different address if the card still read it.
+    const card = mount({
+      view: "page",
+      form: {
+        state: { value: { serverUrl: "http://stale.test:8790" } },
+        mutate: async () => true,
+      },
+    });
+    await card.flush();
+    expect(inputById(card.element(), "rembric-server-input").props.value).toBe(
+      "http://memory.test:8790",
+    );
+    expect(calls[0]).toEqual({ url: "/plugins/rembric/config", method: "GET" });
+  });
+
+  it("saves the address through POST config and then verifies it, with no form prop", async () => {
+    const calls = [];
+    const fetch = async (url, init = {}) => {
+      const method = init.method ?? "GET";
+      calls.push({ url, method, body: init.body });
+      if (method === "GET") {
+        return jsonResponse(200, {
+          serverUrl: "http://old.test:8790",
+          tokenSource: "none",
+          hasToken: false,
+        });
+      }
+      if (url === "/plugins/rembric/config") {
+        return jsonResponse(200, { ok: true, serverUrl: "http://new.test:8790" });
+      }
+      return jsonResponse(200, { ok: true, tokenSource: "store" });
+    };
+    const { mount } = materialize({ fetch });
+    const card = mount();
+    await card.flush();
+    inputById(card.element(), "rembric-server-input").props.onChange({
+      target: { value: "http://new.test:8790" },
+    });
+    await card.flush();
+    buttonOf(card.element()).props.onClick();
+    await card.flush();
+
+    const configPosts = calls.filter(
+      (call) => call.url === "/plugins/rembric/config" && call.method === "POST",
+    );
+    expect(configPosts).toHaveLength(1);
+    expect(JSON.parse(configPosts[0].body)).toEqual({ serverUrl: "http://new.test:8790" });
+
+    const verifyPosts = calls.filter(
+      (call) => call.url === "/plugins/rembric/verify" && call.method === "POST",
+    );
+    // The first verify is the silent mount probe for the old address; the
+    // last is the Save check for the new one.
+    expect(JSON.parse(verifyPosts.at(-1).body)).toEqual({ serverUrl: "http://new.test:8790" });
+
+    const text = textOf(card.element());
+    expect(text).toContain("Connected");
+    expect(text).toContain("Token is valid");
+    expect(inputById(card.element(), "rembric-server-input").props.value).toBe(
+      "http://new.test:8790",
+    );
+  });
+
+  it("highlights the server field for an invalid address and saves nothing", async () => {
+    const calls = [];
+    const fetch = async (url, init = {}) => {
+      calls.push({ url, method: init.method ?? "GET" });
+      if ((init.method ?? "GET") === "GET") {
+        return jsonResponse(200, {
+          serverUrl: "http://old.test:8790",
+          tokenSource: "none",
+          hasToken: false,
+        });
+      }
+      return jsonResponse(200, { ok: true, tokenSource: "store" });
+    };
+    const { mount } = materialize({ fetch });
+    const card = mount();
+    await card.flush();
+    inputById(card.element(), "rembric-server-input").props.onChange({
+      target: { value: "not a url" },
+    });
+    await card.flush();
+    buttonOf(card.element()).props.onClick();
+    await card.flush();
+
+    expect(
+      calls.filter((call) => call.url === "/plugins/rembric/config" && call.method === "POST"),
+    ).toHaveLength(0);
+    const text = textOf(card.element());
+    expect(text).toContain("That is not a URL");
+    expect(text).toContain("Not connected");
+  });
+
+  it("shows the config route's 501 message on the server field and does not verify", async () => {
+    const calls = [];
+    const fetch = async (url, init = {}) => {
+      const method = init.method ?? "GET";
+      calls.push({ url, method });
+      if (method === "GET") {
+        return jsonResponse(200, { serverUrl: "", tokenSource: "none", hasToken: false });
+      }
+      if (url === "/plugins/rembric/config") {
+        return jsonResponse(501, {
+          error: "the host has no configuration editor, so the server URL cannot be saved",
+        });
+      }
+      return jsonResponse(200, { ok: true, tokenSource: "store" });
+    };
+    const { mount } = materialize({ fetch });
+    const card = mount();
+    await card.flush();
+    inputById(card.element(), "rembric-server-input").props.onChange({
+      target: { value: "http://memory.test:8790" },
+    });
+    await card.flush();
+    buttonOf(card.element()).props.onClick();
+    await card.flush();
+
+    expect(
+      calls.filter((call) => call.url === "/plugins/rembric/verify" && call.method === "POST"),
+    ).toHaveLength(0);
+    expect(textOf(card.element())).toContain(
+      "the host has no configuration editor, so the server URL cannot be saved",
+    );
   });
 
   it("wires the single Save button and starts idle", () => {

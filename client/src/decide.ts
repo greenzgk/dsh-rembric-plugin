@@ -14,7 +14,7 @@ export type TokenSource = "store" | "env" | "none";
 
 /** Everything the card renders from. */
 export interface CardState {
-  /** Server address shown in the field; empty until the form provides one. */
+  /** Server address shown in the field; empty until the host config route answers. */
   serverUrl: string;
   /** What the user typed in the token field. Empty = keep the stored token. */
   tokenDraft: string;
@@ -136,7 +136,7 @@ export function resultMarkOf(state: CardState): {
   return { text: "✕ " + state.result.message, tone: "fail" };
 }
 
-/** Client-side URL sanity check before touching the config form. */
+/** Client-side URL sanity check before touching the host config route. */
 export function validateServerUrl(url: string): { ok: true } | { ok: false; message: string } {
   if (/^https?:\/\/\S+$/.test(url.trim())) return { ok: true };
   return {

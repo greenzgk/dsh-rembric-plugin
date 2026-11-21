@@ -2,13 +2,16 @@
 // token probe on open, and one Save action for both.
 //
 // The card is a thin shell: every transition goes through the pure decide() in
-// ./decide, which is tested without a DOM. This file only reads the harness
-// config form, presses buttons, and talks to the host verify route.
+// ./decide, which is tested without a DOM. This file only reads the host
+// config route on mount, presses buttons, and talks to the host routes.
 //
-// Form contract (dsh-client-ui-plugin-manager / dsh-client-ui-settings):
-//   props.form = { state: { status, value, revision, ... }, mutate(ops, rev) }
-//   read  current address: form.state.value.serverUrl
-//   write current address: form.mutate([{op:"set", path:["serverUrl"], value}], rev)
+// Host contract:
+//   GET  /plugins/rembric/config -> { serverUrl, tokenSource, hasToken }
+//   POST /plugins/rembric/config   { serverUrl } persists through the config
+//                                  editor, then the plugin restarts
+//   POST /plugins/rembric/verify   { serverUrl, token? } checks the connection
+//                                  and writes the token on success
+// The card never reads a config form prop: the host owns the config document.
 // The token never enters config: the password field holds only the user's
 // draft, which is sent to the verify route and persisted host-side.
 import {
@@ -27,76 +30,12 @@ import {
   resultMarkOf,
   validateServerUrl,
   type CardState,
-  type VerifyOutcome,
 } from "./decide";
+import { fetchHostConfig, saveHostConfig, verifyHostConnection } from "./host-config";
 
-const VERIFY_PATH = "/plugins/rembric/verify";
-
-interface ConfigFormLike {
-  state?: {
-    status?: string;
-    value?: Record<string, unknown> | undefined;
-    revision?: number | undefined;
-  };
-  mutate?: (ops: unknown[], expectedRevision?: number) => Promise<boolean>;
-}
-
-/** Current effective server address as the host config form sees it. */
-function formServerUrl(form: unknown): string {
-  const f = form as ConfigFormLike | undefined;
-  const value = f?.state?.value;
-  if (value && typeof value.serverUrl === "string") return value.serverUrl;
-  return "";
-}
-
-/** Persist the server address through the harness config form. */
-async function writeServerUrl(form: unknown, url: string): Promise<boolean> {
-  const f = form as ConfigFormLike | undefined;
-  if (!f || typeof f.mutate !== "function") return false;
-  const ops = [{ op: "set", path: ["serverUrl"], value: url }];
-  return (await f.mutate(ops, f.state?.revision)) === true;
-}
-
-/** Map a verify-route JSON body into the decide() outcome vocabulary. */
-function outcomeFromJson(data: unknown): VerifyOutcome {
-  if (data && typeof data === "object") {
-    const d = data as Record<string, unknown>;
-    if (d.ok === true) {
-      const ts = d.tokenSource;
-      return {
-        type: "success",
-        tokenSource:
-          ts === "store" || ts === "env" || ts === "none" || ts === "request" ? ts : "none",
-      };
-    }
-    if (d.ok === false) {
-      return {
-        type: "failure",
-        kind: typeof d.kind === "string" ? d.kind : "error",
-        message: typeof d.message === "string" ? d.message : "verification failed",
-      };
-    }
-  }
-  return { type: "unavailable" };
-}
-
-async function postVerify(body: Record<string, string>): Promise<VerifyOutcome> {
-  try {
-    const resp = await fetch(VERIFY_PATH, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    return outcomeFromJson(await resp.json().catch(() => null));
-  } catch {
-    // Route missing or transport failure: never claim "Connected".
-    return { type: "unavailable" };
-  }
-}
-
-function initialCardState(serverUrl: string): CardState {
+function initialCardState(): CardState {
   return {
-    serverUrl,
+    serverUrl: "",
     tokenDraft: "",
     tokenSource: "none",
     connected: null,
@@ -109,37 +48,36 @@ function initialCardState(serverUrl: string): CardState {
 }
 
 /**
- * Reads the effective server address from the config form, probes the
+ * Reads the effective server address from the config route, probes the
  * stored/ambient token on open, and saves address then token through the
  * single Save button.
  */
-export function RembricSettingsCard(props: {
-  view: "summary" | "page";
-  form?: unknown;
-}): ReactElement {
-  const formUrl = formServerUrl(props.form);
-  const [state, setState] = useState<CardState>(() => initialCardState(formUrl));
-  // Once the user edits the address field, stop adopting the form value
+export function RembricSettingsCard(_props: { view: "summary" | "page" }): ReactElement {
+  const [state, setState] = useState<CardState>(initialCardState);
+  // Once the user edits the address field, stop adopting the host value
   // underneath them; the Save click is what persists.
   const addressDirty = useRef(false);
 
-  // Adopt the effective address from the config form until the user types.
-  useEffect(() => {
-    if (addressDirty.current) return;
-    setState((s) => (s.serverUrl === formUrl ? s : { ...s, serverUrl: formUrl }));
-  }, [formUrl]);
-
-  // Open probe: does the stored/ambient token verify against the
-  // effective address? The config form hydrates after mount, so the probe
-  // waits for formUrl and then runs exactly once — re-verification is a
-  // Save action, not a per-keystroke one. Only success changes the banner;
+  // Mount: adopt the effective address and token source from the host, then
+  // probe the stored/ambient token against that address once. The route
+  // answers the same effective value the plugin runs with, so the field opens
+  // on what is really in use. The probe is tied to the host URL, not to the
+  // field: typing must not silently verify (and possibly mark connected) an
+  // address the user has not saved yet. Only success changes the banner;
   // failure or an unreachable route leaves "Not connected".
-  const probeRan = useRef(false);
   useEffect(() => {
-    if (probeRan.current || !formUrl) return;
-    probeRan.current = true;
     let cancelled = false;
-    void postVerify({ serverUrl: formUrl }).then((outcome) => {
+    void (async () => {
+      const config = await fetchHostConfig();
+      if (cancelled || !config) return;
+      const url = config.serverUrl.trim();
+      setState((cur) =>
+        addressDirty.current
+          ? { ...cur, tokenSource: config.tokenSource }
+          : { ...cur, serverUrl: config.serverUrl, tokenSource: config.tokenSource },
+      );
+      if (!url || addressDirty.current) return;
+      const outcome = await verifyHostConnection({ serverUrl: url });
       if (cancelled || outcome.type !== "success") return;
       setState((cur) => {
         // A save started (or already finished) while this probe was in
@@ -150,14 +88,14 @@ export function RembricSettingsCard(props: {
           ...cur,
           connected: true,
           tokenSource: effectiveSource(outcome.tokenSource),
-          verifiedUrl: formUrl,
+          verifiedUrl: url,
         };
       });
-    });
+    })();
     return () => {
       cancelled = true;
     };
-  }, [formUrl]);
+  }, []);
 
   const save = useCallback(async () => {
     const url = state.serverUrl.trim();
@@ -168,33 +106,23 @@ export function RembricSettingsCard(props: {
     }
     setState((s) => ({ ...s, busy: true, errorTarget: null, result: null }));
 
-    // One save action, after all fields: persist the address first, then
-    // verify. A failed config write stops before the network call.
-    let persisted = false;
-    try {
-      persisted = await writeServerUrl(props.form, url);
-    } catch {
-      persisted = false;
-    }
-    if (!persisted) {
-      setState((s) =>
-        decide(s, {
-          type: "failure",
-          kind: "config-write",
-          message: "the address could not be saved",
-        }),
-      );
+    // One save action, after all fields: persist the address through the
+    // config route first, then verify. A failed write stops before the
+    // network call.
+    const saved = await saveHostConfig(url);
+    if (!saved.ok) {
+      setState((s) => decide(s, { type: "failure", kind: "config-write", message: saved.message }));
       return;
     }
 
     // Empty draft = verify the stored/ambient token; the route never
     // erases it. Explicit draft = the route persists it on success.
     const draft = state.tokenDraft.trim();
-    const body: Record<string, string> = { serverUrl: url };
+    const body: { serverUrl: string; token?: string } = { serverUrl: url };
     if (draft) body.token = draft;
-    const outcome = await postVerify(body);
+    const outcome = await verifyHostConnection(body);
     setState((s) => decide(s, outcome));
-  }, [state.serverUrl, state.tokenDraft, props.form]);
+  }, [state.serverUrl, state.tokenDraft]);
 
   const banner = bannerOf(state);
   const mark = resultMarkOf(state);

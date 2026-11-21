@@ -148,6 +148,10 @@ Set in the bundle's `cordis.patch.yml` row (editable after install):
   `http://127.0.0.1:8790`. This is the only live config field: the token and
   the project slug are deliberately not config.
 
+The settings card reads the effective address from `/plugins/rembric/config`
+and saves a new one there through the config editor; hand-editing the row is
+still valid for defaults.
+
 ## Token
 
 The API token is **not** stored in config. It is a credential reference —
