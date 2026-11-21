@@ -83,7 +83,8 @@ _Avoid_: Origin, provider
 
 **Connection check**:
 The single probe that asks the Rembric server to accept the token and list its
-tools; the settings card, `/rembric-login`, and `/rembric-status` all share it.
+tools; the settings card and `/rembric-login` share it. `/rembric-status` does
+not probe — it reports the cached session state captured at setup.
 _Avoid_: Handshake, ping
 
 **Settings card**:
