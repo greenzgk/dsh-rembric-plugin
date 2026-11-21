@@ -19,19 +19,23 @@ const MAX_VERIFY_BODY_BYTES = 8 * 1024;
 // deps is { checkConnection, resolveToken, saveToken } injected from
 // host.js so this module never imports the host back (no module cycle).
 export function registerVerifyRoute(ctx, deps) {
-  const webServer = ctx.get("webServer");
-  const connection = ctx.get("connection");
-  if (!webServer || !connection) return;
-
-  ctx.effect(
-    () =>
-      webServer.register({
-        kind: "exact",
-        path: VERIFY_PATH,
-        handler: (req, res) => handleVerify(ctx, deps, connection, req, res),
-      }),
-    "rembric: verify route",
-  );
+  // ctx.inject waits until both services are active and restarts this callback
+  // when either one reloads. If they never appear (trimmed / Electron builds)
+  // the callback stays pending and nothing registers — no throw at apply time.
+  ctx.inject(["webServer", "connection"], (webCtx) => {
+    // The handler keeps the plugin context because that is where ctx.logger
+    // lives (the failed-save and unexpected-failure paths log through it).
+    const connection = webCtx.connection;
+    webCtx.effect(
+      () =>
+        webCtx.webServer.register({
+          kind: "exact",
+          path: VERIFY_PATH,
+          handler: (req, res) => handleVerify(ctx, deps, connection, req, res),
+        }),
+      "rembric: verify route",
+    );
+  });
 }
 
 async function handleVerify(ctx, deps, connection, req, res) {

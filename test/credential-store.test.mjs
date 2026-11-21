@@ -595,8 +595,9 @@ describe("[H] apply() wires credential commands end-to-end", () => {
       },
       agents: { list: () => [] },
       workingDirectory: { get: () => undefined },
-      // No harness services in this fake: the verify route feature-detects and
-      // stays unregistered, which is the Electron/trimmed-build case.
+      // No harness services in this fake, so ctx.inject never runs its
+      // callback and the routes stay unregistered — the trimmed-build case.
+      inject: () => ({ dispose: () => {} }),
       get: () => undefined,
     };
     return { ctx, registered, warnings, setCalls };
