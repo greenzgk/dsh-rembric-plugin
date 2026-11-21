@@ -30,6 +30,12 @@ export interface CardState {
   result: { ok: true } | { ok: false; message: string } | null;
   /** Address saved while the verify route was unreachable ("Stored"). */
   stored: boolean;
+  /**
+   * The address the last successful verification actually checked. The
+   * Connected hint renders this, not the live field value, so editing the
+   * URL after a successful save cannot advertise an unverified address.
+   */
+  verifiedUrl: string;
 }
 
 /**
@@ -55,6 +61,16 @@ const TOKEN_FAULT_KINDS = new Set([
 ]);
 
 /**
+ * The effective token source after a success whose token arrived with the
+ * request: the route just persisted it, so from now on it lives in the
+ * store. Shared by decide() and the card's open probe so the mapping
+ * exists once.
+ */
+export function effectiveSource(source: TokenSource | "request"): TokenSource {
+  return source === "request" ? "store" : source;
+}
+
+/**
  * The one transition function. Returns a fresh state; never mutates input.
  */
 export function decide(state: CardState, outcome: VerifyOutcome): CardState {
@@ -62,15 +78,15 @@ export function decide(state: CardState, outcome: VerifyOutcome): CardState {
     case "success":
       return {
         ...state,
-        // A token that arrived with this request was just persisted by the
-        // route, so the effective source from now on is the store.
-        tokenSource: outcome.tokenSource === "request" ? "store" : outcome.tokenSource,
+        tokenSource: effectiveSource(outcome.tokenSource),
         tokenDraft: "",
         connected: true,
         busy: false,
         errorTarget: null,
         result: { ok: true },
         stored: false,
+        // This is the address the route just checked; pin it for the hint.
+        verifiedUrl: state.serverUrl.trim(),
       };
     case "failure":
       return {

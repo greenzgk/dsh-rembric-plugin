@@ -17,6 +17,7 @@ import * as React from "react";
 import {
   bannerOf,
   decide,
+  effectiveSource,
   resultMarkOf,
   validateServerUrl,
   type CardState,
@@ -132,6 +133,7 @@ function initialCardState(serverUrl: string): CardState {
     errorTarget: null,
     result: null,
     stored: false,
+    verifiedUrl: "",
   };
 }
 
@@ -156,29 +158,35 @@ export function RembricSettingsCard(props: {
     setState((s) => (s.serverUrl === formUrl ? s : { ...s, serverUrl: formUrl }));
   }, [formUrl]);
 
-  // Open probe: does the stored/ambient token verify against the current
-  // address? Only success changes the banner; failure or an unreachable
-  // route leaves "Not connected" (never "Connected", never a save mark).
+  // Open probe: does the stored/ambient token verify against the
+  // effective address? The config form hydrates after mount, so the probe
+  // waits for formUrl and then runs exactly once — re-verification is a
+  // Save action, not a per-keystroke one. Only success changes the banner;
+  // failure or an unreachable route leaves "Not connected".
+  const probeRan = useRef(false);
   useEffect(() => {
-    if (!formUrl) return;
+    if (probeRan.current || !formUrl) return;
+    probeRan.current = true;
     let cancelled = false;
     void postVerify({ serverUrl: formUrl }).then((outcome) => {
       if (cancelled || outcome.type !== "success") return;
-      setState((cur) => ({
-        ...cur,
-        connected: true,
-        // An explicit probe token cannot exist here (the probe sends none),
-        // but map it defensively the same way decide() does.
-        tokenSource: outcome.tokenSource === "request" ? "store" : outcome.tokenSource,
-      }));
+      setState((cur) => {
+        // A save started (or already finished) while this probe was in
+        // flight owns the banner and the save row; a late probe must not
+        // flip "Not connected" under a visible ✕.
+        if (cur.busy || cur.result !== null) return cur;
+        return {
+          ...cur,
+          connected: true,
+          tokenSource: effectiveSource(outcome.tokenSource),
+          verifiedUrl: formUrl,
+        };
+      });
     });
     return () => {
       cancelled = true;
     };
-    // Mount-only: the probe reflects the stored token at open, not every
-    // keystroke. Re-verification happens on Save.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [formUrl]);
 
   const save = useCallback(async () => {
     const url = state.serverUrl.trim();
@@ -222,9 +230,9 @@ export function RembricSettingsCard(props: {
   const failureMessage = state.result && !state.result.ok ? state.result.message : null;
 
   const bannerHint =
-    banner.label === "Connected"
-      ? `Token source: ${state.tokenSource} \u00b7 ${state.serverUrl}`
-      : banner.label === "Stored"
+    state.connected === true
+      ? `Token source: ${state.tokenSource} \u00b7 ${state.verifiedUrl}`
+      : state.stored
         ? "Saved. The verify route was unreachable, so the connection was not checked."
         : "Set the server URL and a token below, then save.";
 

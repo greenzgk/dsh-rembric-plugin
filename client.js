@@ -36,19 +36,29 @@ const TOKEN_FAULT_KINDS = /* @__PURE__ */ new Set([
 	"save-failed"
 ]);
 /**
+* The effective token source after a success whose token arrived with the
+* request: the route just persisted it, so from now on it lives in the
+* store. Shared by decide() and the card's open probe so the mapping
+* exists once.
+*/
+function effectiveSource(source) {
+	return source === "request" ? "store" : source;
+}
+/**
 * The one transition function. Returns a fresh state; never mutates input.
 */
 function decide(state, outcome) {
 	switch (outcome.type) {
 		case "success": return {
 			...state,
-			tokenSource: outcome.tokenSource === "request" ? "store" : outcome.tokenSource,
+			tokenSource: effectiveSource(outcome.tokenSource),
 			tokenDraft: "",
 			connected: true,
 			busy: false,
 			errorTarget: null,
 			result: { ok: true },
-			stored: false
+			stored: false,
+			verifiedUrl: state.serverUrl.trim()
 		};
 		case "failure": return {
 			...state,
@@ -205,7 +215,8 @@ function initialCardState(serverUrl) {
 		busy: false,
 		errorTarget: null,
 		result: null,
-		stored: false
+		stored: false,
+		verifiedUrl: ""
 	};
 }
 /**
@@ -224,21 +235,27 @@ function RembricSettingsCard(props) {
 			serverUrl: formUrl
 		});
 	}, [formUrl]);
+	const probeRan = useRef(false);
 	useEffect(() => {
-		if (!formUrl) return;
+		if (probeRan.current || !formUrl) return;
+		probeRan.current = true;
 		let cancelled = false;
 		postVerify({ serverUrl: formUrl }).then((outcome) => {
 			if (cancelled || outcome.type !== "success") return;
-			setState((cur) => ({
-				...cur,
-				connected: true,
-				tokenSource: outcome.tokenSource === "request" ? "store" : outcome.tokenSource
-			}));
+			setState((cur) => {
+				if (cur.busy || cur.result !== null) return cur;
+				return {
+					...cur,
+					connected: true,
+					tokenSource: effectiveSource(outcome.tokenSource),
+					verifiedUrl: formUrl
+				};
+			});
 		});
 		return () => {
 			cancelled = true;
 		};
-	}, []);
+	}, [formUrl]);
 	const save = useCallback(async () => {
 		const url = state.serverUrl.trim();
 		const check = validateServerUrl(url);
@@ -283,7 +300,7 @@ function RembricSettingsCard(props) {
 	const banner = bannerOf(state);
 	const mark = resultMarkOf(state);
 	const failureMessage = state.result && !state.result.ok ? state.result.message : null;
-	const bannerHint = banner.label === "Connected" ? `Token source: ${state.tokenSource} \u00b7 ${state.serverUrl}` : banner.label === "Stored" ? "Saved. The verify route was unreachable, so the connection was not checked." : "Set the server URL and a token below, then save.";
+	const bannerHint = state.connected === true ? `Token source: ${state.tokenSource} \u00b7 ${state.verifiedUrl}` : state.stored ? "Saved. The verify route was unreachable, so the connection was not checked." : "Set the server URL and a token below, then save.";
 	const dotClass = banner.tone === "ok" ? "rc-dot rc-dot-ok" : banner.tone === "err" ? "rc-dot rc-dot-err" : "rc-dot";
 	return h("div", { className: "rembric-card" }, h("style", null, CSS), h("div", { className: "rc-head" }, h("h1", null, "Rembric Plugin"), h("p", null, "Memories for the current workspace.")), h("div", { className: "rc-body" }, h("div", { className: "rc-banner" }, h("span", { className: dotClass }), h("div", null, h("b", null, banner.label), h("p", { className: "rc-hint" }, bannerHint))), h("div", { className: "rc-sec" }, h("h2", null, "Server"), h("label", {
 		className: "rc-label",

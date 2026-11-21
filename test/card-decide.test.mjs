@@ -18,6 +18,7 @@ function freshState(overrides = {}) {
     errorTarget: null,
     result: null,
     stored: false,
+    verifiedUrl: "",
     ...overrides,
   };
 }
@@ -34,6 +35,9 @@ describe("decide: success", () => {
     expect(next.result).toEqual({ ok: true });
     expect(next.tokenDraft).toBe("");
     expect(next.stored).toBe(false);
+    // The Connected hint must render the address this verification checked,
+    // not whatever the field later shows.
+    expect(next.verifiedUrl).toBe("http://127.0.0.1:8790");
   });
 
   it("reports a token that just arrived via request as coming from the store", () => {
@@ -48,6 +52,44 @@ describe("decide: success", () => {
       "store",
     );
     expect(decide(freshState(), { type: "success", tokenSource: "env" }).tokenSource).toBe("env");
+  });
+});
+
+describe("decide: empty token draft verifies the stored token", () => {
+  it("an empty draft verifying successfully keeps the stored source and erases nothing", () => {
+    // AC 9: empty token = verify stored. The draft was and stays empty;
+    // the stored token's source survives the round-trip untouched.
+    const next = decide(freshState({ tokenDraft: "", tokenSource: "store" }), {
+      type: "success",
+      tokenSource: "store",
+    });
+    expect(next.tokenDraft).toBe("");
+    expect(next.tokenSource).toBe("store");
+    expect(next.connected).toBe(true);
+    expect(next.verifiedUrl).toBe("http://127.0.0.1:8790");
+  });
+
+  it("an empty draft hitting no-token points at the token field and keeps the draft empty", () => {
+    // Nothing was typed and nothing is stored: the failure lands under the
+    // token field; the draft is not rewritten to anything that could be
+    // mistaken for a stored value.
+    const next = decide(freshState({ tokenDraft: "", tokenSource: "none" }), {
+      type: "failure",
+      kind: "no-token",
+      message: "no token is configured",
+    });
+    expect(next.tokenDraft).toBe("");
+    expect(next.errorTarget).toBe("token");
+    expect(next.connected).toBe(false);
+  });
+
+  it("an empty draft against an unreachable route reads Stored, never Connected", () => {
+    const next = decide(freshState({ tokenDraft: "", tokenSource: "store" }), {
+      type: "unavailable",
+    });
+    expect(next.stored).toBe(true);
+    expect(next.connected).toBe(false);
+    expect(next.tokenDraft).toBe("");
   });
 });
 
@@ -66,6 +108,8 @@ describe("decide: failure routes the error to the guilty field", () => {
       expect(next.connected).toBe(false);
       expect(next.busy).toBe(false);
       expect(next.result).toEqual({ ok: false, message: `boom: ${kind}` });
+      // A failure does not rewrite what was last verified.
+      expect(next.verifiedUrl).toBe("");
     });
   }
 
