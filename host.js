@@ -11,8 +11,12 @@
 
 import { createMcpClient } from "./mcp-client.js";
 import { resolveProject, buildEndpoint } from "./project.js";
-import { createSessionCore, underscoreToolNames as _unusedUnderscore } from "./session-core.js";
+import { createSessionCore, underscoreToolNames } from "./session-core.js";
 import { registerRembricCommands, wireFileRecall, wireSubagentLearnings } from "./commands.js";
+
+// Re-exported so the rewrite helpers are reachable from the host module
+// (ticket #11): session-core.js holds the single implementation.
+export { underscoreToolNames };
 
 export const name = "dsh-rembric-plugin";
 export const inject = [
@@ -30,20 +34,17 @@ const DISCOVERY_TIMEOUT_MS = 10_000;
 const FAILURE_COOLDOWN_MS = 30_000;
 const DEFAULT_SERVER_URL = "http://127.0.0.1:8790";
 
-// Rewrite dotted Rembric tool names to the underscored names DSH registers them under.
-function underscoreToolNames(text) {
-  return String(text ?? "").replace(/\b(memory|project)\.([a-z_][a-z0-9_]*)\b/g, "$1_$2");
-}
-
 // Recursively rewrite every "description" string in a JSON Schema so the model
 // only ever sees underscored tool names.
-function renameToolsInDescriptions(node) {
+export function renameToolsInDescriptions(node) {
   if (Array.isArray(node)) return node.map(renameToolsInDescriptions);
   if (node && typeof node === "object") {
     const out = {};
     for (const [key, value] of Object.entries(node)) {
       out[key] =
-        key === "description" ? underscoreToolNames(value) : renameToolsInDescriptions(value);
+        key === "description" && typeof value === "string"
+          ? underscoreToolNames(value)
+          : renameToolsInDescriptions(value);
     }
     return out;
   }
