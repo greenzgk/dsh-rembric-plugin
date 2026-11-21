@@ -7,9 +7,11 @@
 //   window.__ModuleLoader__.load({ id: "<package name>", factory: (require) => { ... } })
 //
 // Materializing the factory runs the plugin body; externals (react) resolve
-// through the factory's own require against the shell's frozen module table.
+// through the factory's own require against the shell's frozen module table
+// (the card needs both react and react/jsx-runtime).
 // The harness's own client bundling preset is not published, so this script
-// reproduces the format with vp pack (CJS) plus the wrapper below.
+// reproduces the format with vp pack (CJS, configured in vite.config.ts) plus
+// the wrapper below.
 //
 // Reproducible from a clean checkout: `pnpm install` runs it through the
 // package "prepare" script, and the test suite rebuilds before asserting.
@@ -25,24 +27,10 @@ const vp = join(root, "node_modules", ".bin", "vp");
 
 const outDir = mkdtempSync(join(tmpdir(), "rembric-client-build-"));
 try {
-  execFileSync(
-    vp,
-    [
-      "pack",
-      "client/src/index.ts",
-      "--format",
-      "cjs",
-      "--out-dir",
-      outDir,
-      "--no-config",
-      "--platform",
-      "neutral",
-      "--deps.never-bundle",
-      "react",
-      "--no-dts",
-    ],
-    { cwd: root, stdio: "pipe" },
-  );
+  execFileSync(vp, ["pack", "client/src/index.ts", "--out-dir", outDir], {
+    cwd: root,
+    stdio: "pipe",
+  });
   const cjs = readFileSync(join(outDir, "index.cjs"), "utf8");
   const bundle =
     "window.__ModuleLoader__.load({id:" +

@@ -1,28 +1,7 @@
 window.__ModuleLoader__.load({id:"dsh-rembric-plugin",factory:(require)=>{var module={exports:{}};var exports=module.exports;
 Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
-// \0rolldown/runtime.js
-var __create = Object.create;
-var __defProp = Object.defineProperty;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __getProtoOf = Object.getPrototypeOf;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __copyProps = (to, from, except, desc) => {
-	if (from && typeof from === "object" || typeof from === "function") for (var keys = __getOwnPropNames(from), i = 0, n = keys.length, key; i < n; i++) {
-		key = keys[i];
-		if (!__hasOwnProp.call(to, key) && key !== except) __defProp(to, key, {
-			get: ((k) => from[k]).bind(null, key),
-			enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable
-		});
-	}
-	return to;
-};
-var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(isNodeMode || !mod || !mod.__esModule || !__hasOwnProp.call(mod, "default") ? __defProp(target, "default", {
-	value: mod,
-	enumerable: true
-}) : target, mod));
 let react = require("react");
-react = __toESM(react, 1);
+let react_jsx_runtime = require("react/jsx-runtime");
 // client/src/decide.ts
 /**
 * Kinds that mean the token is at fault; everything else is the address.
@@ -123,9 +102,7 @@ function validateServerUrl(url) {
 		message: "That is not a URL. Expected something like http://127.0.0.1:8790"
 	};
 }
-// client/src/card.ts
-const h = react.createElement;
-const { useCallback, useEffect, useRef, useState } = react;
+// client/src/card.tsx
 const VERIFY_PATH = "/plugins/rembric/verify";
 const CSS = `
 .rembric-card{--line:#242c3a;--text:#e7eaf0;--muted:#8b95a7;--accent:#3f7bf0;--accent-dim:#2b5bb5;--ok:#3fb950;--err:#f85149;--mono:ui-monospace,SFMono-Regular,Menlo,monospace;background:#151a23;border:1px solid var(--line);border-radius:12px;overflow:hidden;color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -223,17 +200,17 @@ function initialCardState(serverUrl) {
 */
 function RembricSettingsCard(props) {
 	const formUrl = formServerUrl(props.form);
-	const [state, setState] = useState(() => initialCardState(formUrl));
-	const addressDirty = useRef(false);
-	useEffect(() => {
+	const [state, setState] = (0, react.useState)(() => initialCardState(formUrl));
+	const addressDirty = (0, react.useRef)(false);
+	(0, react.useEffect)(() => {
 		if (addressDirty.current) return;
 		setState((s) => s.serverUrl === formUrl ? s : {
 			...s,
 			serverUrl: formUrl
 		});
 	}, [formUrl]);
-	const probeRan = useRef(false);
-	useEffect(() => {
+	const probeRan = (0, react.useRef)(false);
+	(0, react.useEffect)(() => {
 		if (probeRan.current || !formUrl) return;
 		probeRan.current = true;
 		let cancelled = false;
@@ -253,7 +230,7 @@ function RembricSettingsCard(props) {
 			cancelled = true;
 		};
 	}, [formUrl]);
-	const save = useCallback(async () => {
+	const save = (0, react.useCallback)(async () => {
 		const url = state.serverUrl.trim();
 		const check = validateServerUrl(url);
 		if (!check.ok) {
@@ -297,45 +274,113 @@ function RembricSettingsCard(props) {
 	const banner = bannerOf(state);
 	const mark = resultMarkOf(state);
 	const failureMessage = state.result && !state.result.ok ? state.result.message : null;
-	const bannerHint = state.connected === true ? `Token source: ${state.tokenSource} \u00b7 ${state.verifiedUrl}` : state.stored ? "Saved. The verify route was unreachable, so the connection was not checked." : "Set the server URL and a token below, then save.";
+	const bannerHint = state.connected === true ? `Token source: ${state.tokenSource} · ${state.verifiedUrl}` : state.stored ? "Saved. The verify route was unreachable, so the connection was not checked." : "Set the server URL and a token below, then save.";
 	const dotClass = banner.tone === "ok" ? "rc-dot rc-dot-ok" : banner.tone === "err" ? "rc-dot rc-dot-err" : "rc-dot";
-	return h("div", { className: "rembric-card" }, h("style", null, CSS), h("div", { className: "rc-head" }, h("h1", null, "Rembric Plugin"), h("p", null, "Memories for the current workspace.")), h("div", { className: "rc-body" }, h("div", { className: "rc-banner" }, h("span", { className: dotClass }), h("div", null, h("b", null, banner.label), h("p", { className: "rc-hint" }, bannerHint))), h("div", { className: "rc-sec" }, h("h2", null, "Server"), h("label", {
-		className: "rc-label",
-		htmlFor: "rembric-server-input"
-	}, "Rembric server URL"), h("input", {
-		id: "rembric-server-input",
-		type: "text",
-		spellCheck: false,
-		value: state.serverUrl,
-		onChange: (e) => {
-			addressDirty.current = true;
-			const v = e.target.value;
-			setState((s) => ({
-				...s,
-				serverUrl: v
-			}));
-		}
-	}), state.errorTarget === "server" && failureMessage ? h("p", { className: "rc-err" }, failureMessage) : null, h("p", { className: "rc-hint" }, "Where the plugin sends and looks up memory.")), h("div", { className: "rc-sec" }, h("h2", null, "Token"), h("label", {
-		className: "rc-label",
-		htmlFor: "rembric-token-input"
-	}, "API token"), h("input", {
-		id: "rembric-token-input",
-		type: "password",
-		spellCheck: false,
-		autoComplete: "off",
-		value: state.tokenDraft,
-		onChange: (e) => {
-			const v = e.target.value;
-			setState((s) => ({
-				...s,
-				tokenDraft: v
-			}));
-		}
-	}), state.errorTarget === "token" && failureMessage ? h("p", { className: "rc-err" }, failureMessage) : null, h("p", { className: "rc-hint" }, "Same token can also be set with ", h("code", null, "/rembric-login <token>"), " in the chat; both paths write the same reference.")), h("div", { className: "rc-rule" }), h("div", { className: "rc-save-row" }, h("button", {
-		type: "button",
-		disabled: state.busy,
-		onClick: () => void save()
-	}, "Save"), mark ? h("span", { className: `rc-result rc-result-${mark.tone}` }, mark.text) : h("span", { className: "rc-result" }))));
+	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+		className: "rembric-card",
+		children: [
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("style", { children: CSS }),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				className: "rc-head",
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h1", { children: "Rembric Plugin" }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: "Memories for the current workspace." })]
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				className: "rc-body",
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: "rc-banner",
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { className: dotClass }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("b", { children: banner.label }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+							className: "rc-hint",
+							children: bannerHint
+						})] })]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: "rc-sec",
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", { children: "Server" }),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("label", {
+								className: "rc-label",
+								htmlFor: "rembric-server-input",
+								children: "Rembric server URL"
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+								id: "rembric-server-input",
+								type: "text",
+								spellCheck: false,
+								value: state.serverUrl,
+								onChange: (e) => {
+									addressDirty.current = true;
+									const v = e.target.value;
+									setState((s) => ({
+										...s,
+										serverUrl: v
+									}));
+								}
+							}),
+							state.errorTarget === "server" && failureMessage ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+								className: "rc-err",
+								children: failureMessage
+							}) : null,
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+								className: "rc-hint",
+								children: "Where the plugin sends and looks up memory."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: "rc-sec",
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", { children: "Token" }),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("label", {
+								className: "rc-label",
+								htmlFor: "rembric-token-input",
+								children: "API token"
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+								id: "rembric-token-input",
+								type: "password",
+								spellCheck: false,
+								autoComplete: "off",
+								value: state.tokenDraft,
+								onChange: (e) => {
+									const v = e.target.value;
+									setState((s) => ({
+										...s,
+										tokenDraft: v
+									}));
+								}
+							}),
+							state.errorTarget === "token" && failureMessage ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+								className: "rc-err",
+								children: failureMessage
+							}) : null,
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("p", {
+								className: "rc-hint",
+								children: [
+									"Same token can also be set with ",
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("code", { children: "/rembric-login <token>" }),
+									" in the chat; both paths write the same reference."
+								]
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", { className: "rc-rule" }),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: "rc-save-row",
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							disabled: state.busy,
+							onClick: () => void save(),
+							children: "Save"
+						}), mark ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: `rc-result rc-result-${mark.tone}`,
+							children: mark.text
+						}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { className: "rc-result" })]
+					})
+				]
+			})
+		]
+	});
 }
 // client/src/index.ts
 /** Shell modules this half needs; "slots" is the UI slot registry. */
