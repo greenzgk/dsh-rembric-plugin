@@ -16,8 +16,8 @@ const VERIFY_PATH = "/plugins/rembric/verify";
 // The body is two short strings; anything bigger is not this card.
 const MAX_VERIFY_BODY_BYTES = 8 * 1024;
 
-// deps is { checkConnection, resolveToken } injected from host.js so this
-// module never imports the host back (no module cycle).
+// deps is { checkConnection, resolveToken, saveToken } injected from
+// host.js so this module never imports the host back (no module cycle).
 export function registerVerifyRoute(ctx, deps) {
   const webServer = ctx.get("webServer");
   const connection = ctx.get("connection");
@@ -82,6 +82,33 @@ async function handleVerify(ctx, deps, connection, req, res) {
 
     const result = await deps.checkConnection({ serverUrl, token });
     if (result.ok) {
+      // A token that arrived with this request and verified is persisted
+      // through the same path /rembric-login uses, so both write the same
+      // credential reference. Tokens resolved from the store or ambient
+      // env are already persisted — only the request path writes, and a
+      // failed verification never writes.
+      if (tokenSource === "request") {
+        try {
+          await deps.saveToken(requestToken);
+        } catch (saveError) {
+          // The verification passed but the token did not survive, so the
+          // card must not claim Connected. The reason goes to the log,
+          // redacted; the response carries only the fixed diagnostic.
+          const reason = saveError instanceof Error ? saveError.message : String(saveError);
+          ctx.logger.warn(
+            redact(
+              `rembric: verify succeeded but the token could not be saved: ${reason}`,
+              requestToken,
+            ),
+          );
+          sendJson(res, 200, {
+            ok: false,
+            kind: "save-failed",
+            message: "the token could not be saved (the host log has the reason)",
+          });
+          return;
+        }
+      }
       sendJson(res, 200, {
         ok: true,
         serverName: result.serverName ?? null,

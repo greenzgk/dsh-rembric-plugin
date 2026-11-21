@@ -1,15 +1,32 @@
-// client/src/card.ts — the Rembric settings card, static stage (ticket #16).
+// client/src/card.ts — the Rembric settings card, live stage (ticket #18).
 //
-// Approved layout: prototype variant B "Status first" (ticket #18). The card
-// shows the connection state, the server address field and the write-only
-// token field, and saves nothing yet — the save wiring and the pure decide()
-// logic land in ticket #18. Until then the state is fixed at "Not connected".
+// Approved layout: prototype variant B "Status first" — unchanged DOM order;
+// only the logic landed here. The card is a thin shell: every transition goes
+// through the pure decide() in ./decide (seam 1, tested without DOM). This
+// file only reads the harness config form, presses buttons, and talks to the
+// host verify route.
 //
-// Plain function component, no hooks: the slot owner renders it with
-// PluginConfigViewProps and it ignores them entirely at this stage.
+// Form contract (dsh-client-ui-plugin-manager / dsh-client-ui-settings):
+//   props.form = { state: { status, value, revision, ... }, mutate(ops, rev) }
+//   read  current address: form.state.value.serverUrl
+//   write current address: form.mutate([{op:"set", path:["serverUrl"], value}], rev)
+// The token never enters config: the password field holds only the user's
+// draft, which is sent to the verify route and persisted host-side.
 import * as React from "react";
 
+import {
+  bannerOf,
+  decide,
+  resultMarkOf,
+  validateServerUrl,
+  type CardState,
+  type VerifyOutcome,
+} from "./decide";
+
 const h = React.createElement;
+const { useCallback, useEffect, useRef, useState } = React;
+
+const VERIFY_PATH = "/plugins/rembric/verify";
 
 // Variant B styles, scoped under .rembric-card so nothing leaks into the
 // host settings UI. Values mirror the approved prototype.
@@ -27,20 +44,197 @@ const CSS = `
 .rembric-card input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(63,123,240,.18)}
 .rembric-card .rc-hint{font-size:12px;color:var(--muted);margin:0}
 .rembric-card .rc-hint code{font-family:var(--mono);font-size:11.5px;background:#0f141d;border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+.rembric-card .rc-err{font-size:12px;color:var(--err);margin:0}
 .rembric-card .rc-rule{height:1px;background:var(--line);margin:0}
 .rembric-card .rc-save-row{display:flex;align-items:center;gap:12px;padding-top:2px}
 .rembric-card button{font:inherit;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;padding:8px 18px;cursor:pointer}
 .rembric-card button:hover{background:var(--accent-dim);border-color:var(--accent-dim)}
+.rembric-card button:disabled{opacity:.55;cursor:default}
 .rembric-card .rc-result{font-size:13px;display:flex;align-items:center;gap:6px}
+.rembric-card .rc-result-ok{color:var(--ok)}
+.rembric-card .rc-result-fail{color:var(--err)}
+.rembric-card .rc-result-busy{color:var(--muted)}
 .rembric-card .rc-banner{display:flex;gap:10px;align-items:flex-start;background:#0f141d;border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:13px}
 .rembric-card .rc-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);margin-top:6px;flex:none}
+.rembric-card .rc-dot-ok{background:var(--ok)}
+.rembric-card .rc-dot-err{background:var(--err)}
 `;
 
+interface ConfigFormLike {
+  state?: {
+    status?: string;
+    value?: Record<string, unknown> | undefined;
+    revision?: number | undefined;
+  };
+  mutate?: (ops: unknown[], expectedRevision?: number) => Promise<boolean>;
+}
+
+/** Current effective server address as the host config form sees it. */
+function formServerUrl(form: unknown): string {
+  const f = form as ConfigFormLike | undefined;
+  const value = f?.state?.value;
+  if (value && typeof value.serverUrl === "string") return value.serverUrl;
+  return "";
+}
+
+/** Persist the server address through the harness config form. */
+async function writeServerUrl(form: unknown, url: string): Promise<boolean> {
+  const f = form as ConfigFormLike | undefined;
+  if (!f || typeof f.mutate !== "function") return false;
+  const ops = [{ op: "set", path: ["serverUrl"], value: url }];
+  return (await f.mutate(ops, f.state?.revision)) === true;
+}
+
+/** Map a verify-route JSON body into the decide() outcome vocabulary. */
+function outcomeFromJson(data: unknown): VerifyOutcome {
+  if (data && typeof data === "object") {
+    const d = data as Record<string, unknown>;
+    if (d.ok === true) {
+      const ts = d.tokenSource;
+      return {
+        type: "success",
+        tokenSource:
+          ts === "store" || ts === "env" || ts === "none" || ts === "request" ? ts : "none",
+      };
+    }
+    if (d.ok === false) {
+      return {
+        type: "failure",
+        kind: typeof d.kind === "string" ? d.kind : "error",
+        message: typeof d.message === "string" ? d.message : "verification failed",
+      };
+    }
+  }
+  return { type: "unavailable" };
+}
+
+async function postVerify(body: Record<string, string>): Promise<VerifyOutcome> {
+  try {
+    const resp = await fetch(VERIFY_PATH, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return outcomeFromJson(await resp.json().catch(() => null));
+  } catch {
+    // Route missing or transport failure: never claim "Connected".
+    return { type: "unavailable" };
+  }
+}
+
+function initialCardState(serverUrl: string): CardState {
+  return {
+    serverUrl,
+    tokenDraft: "",
+    tokenSource: "none",
+    connected: null,
+    busy: false,
+    errorTarget: null,
+    result: null,
+    stored: false,
+  };
+}
+
 /**
- * The static variant B card. Renders the approved copy and empty result
- * space; carries no values and writes nothing (ticket #18 adds the wiring).
+ * The live variant B card. Reads the effective server address from the
+ * config form, probes the stored/ambient token on open, and saves address
+ * then token through the single Save button.
  */
-export function RembricSettingsCard(): React.ReactElement {
+export function RembricSettingsCard(props: {
+  view: "summary" | "page";
+  form?: unknown;
+}): React.ReactElement {
+  const formUrl = formServerUrl(props.form);
+  const [state, setState] = useState<CardState>(() => initialCardState(formUrl));
+  // Once the user edits the address field, stop adopting the form value
+  // underneath them; the Save click is what persists.
+  const addressDirty = useRef(false);
+
+  // Adopt the effective address from the config form until the user types.
+  useEffect(() => {
+    if (addressDirty.current) return;
+    setState((s) => (s.serverUrl === formUrl ? s : { ...s, serverUrl: formUrl }));
+  }, [formUrl]);
+
+  // Open probe: does the stored/ambient token verify against the current
+  // address? Only success changes the banner; failure or an unreachable
+  // route leaves "Not connected" (never "Connected", never a save mark).
+  useEffect(() => {
+    if (!formUrl) return;
+    let cancelled = false;
+    void postVerify({ serverUrl: formUrl }).then((outcome) => {
+      if (cancelled || outcome.type !== "success") return;
+      setState((cur) => ({
+        ...cur,
+        connected: true,
+        // An explicit probe token cannot exist here (the probe sends none),
+        // but map it defensively the same way decide() does.
+        tokenSource: outcome.tokenSource === "request" ? "store" : outcome.tokenSource,
+      }));
+    });
+    return () => {
+      cancelled = true;
+    };
+    // Mount-only: the probe reflects the stored token at open, not every
+    // keystroke. Re-verification happens on Save.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const save = useCallback(async () => {
+    const url = state.serverUrl.trim();
+    const check = validateServerUrl(url);
+    if (!check.ok) {
+      setState((s) => decide(s, { type: "failure", kind: "bad-url", message: check.message }));
+      return;
+    }
+    setState((s) => ({ ...s, busy: true, errorTarget: null, result: null }));
+
+    // One save action, after all fields: persist the address first, then
+    // verify. A failed config write stops before the network call.
+    let persisted = false;
+    try {
+      persisted = await writeServerUrl(props.form, url);
+    } catch {
+      persisted = false;
+    }
+    if (!persisted) {
+      setState((s) =>
+        decide(s, {
+          type: "failure",
+          kind: "config-write",
+          message: "the address could not be saved",
+        }),
+      );
+      return;
+    }
+
+    // Empty draft = verify the stored/ambient token; the route never
+    // erases it. Explicit draft = the route persists it on success.
+    const draft = state.tokenDraft.trim();
+    const body: Record<string, string> = { serverUrl: url };
+    if (draft) body.token = draft;
+    const outcome = await postVerify(body);
+    setState((s) => decide(s, outcome));
+  }, [state.serverUrl, state.tokenDraft, props.form]);
+
+  const banner = bannerOf(state);
+  const mark = resultMarkOf(state);
+  const failureMessage = state.result && !state.result.ok ? state.result.message : null;
+
+  const bannerHint =
+    banner.label === "Connected"
+      ? `Token source: ${state.tokenSource} \u00b7 ${state.serverUrl}`
+      : banner.label === "Stored"
+        ? "Saved. The verify route was unreachable, so the connection was not checked."
+        : "Set the server URL and a token below, then save.";
+
+  const dotClass =
+    banner.tone === "ok"
+      ? "rc-dot rc-dot-ok"
+      : banner.tone === "err"
+        ? "rc-dot rc-dot-err"
+        : "rc-dot";
+
   return h(
     "div",
     { className: "rembric-card" },
@@ -57,13 +251,8 @@ export function RembricSettingsCard(): React.ReactElement {
       h(
         "div",
         { className: "rc-banner" },
-        h("span", { className: "rc-dot" }),
-        h(
-          "div",
-          null,
-          h("b", null, "Not connected"),
-          h("p", { className: "rc-hint" }, "Set the server URL and a token below, then save."),
-        ),
+        h("span", { className: dotClass }),
+        h("div", null, h("b", null, banner.label), h("p", { className: "rc-hint" }, bannerHint)),
       ),
       h(
         "div",
@@ -74,7 +263,20 @@ export function RembricSettingsCard(): React.ReactElement {
           { className: "rc-label", htmlFor: "rembric-server-input" },
           "Rembric server URL",
         ),
-        h("input", { id: "rembric-server-input", type: "text", spellCheck: false }),
+        h("input", {
+          id: "rembric-server-input",
+          type: "text",
+          spellCheck: false,
+          value: state.serverUrl,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+            addressDirty.current = true;
+            const v = e.target.value;
+            setState((s) => ({ ...s, serverUrl: v }));
+          },
+        }),
+        state.errorTarget === "server" && failureMessage
+          ? h("p", { className: "rc-err" }, failureMessage)
+          : null,
         h("p", { className: "rc-hint" }, "Where the plugin sends and looks up memory."),
       ),
       h(
@@ -87,7 +289,15 @@ export function RembricSettingsCard(): React.ReactElement {
           type: "password",
           spellCheck: false,
           autoComplete: "off",
+          value: state.tokenDraft,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+            const v = e.target.value;
+            setState((s) => ({ ...s, tokenDraft: v }));
+          },
         }),
+        state.errorTarget === "token" && failureMessage
+          ? h("p", { className: "rc-err" }, failureMessage)
+          : null,
         h(
           "p",
           { className: "rc-hint" },
@@ -100,9 +310,10 @@ export function RembricSettingsCard(): React.ReactElement {
       h(
         "div",
         { className: "rc-save-row" },
-        h("button", { type: "button" }, "Save"),
-        // Result space for the green check / red cross — filled by ticket #18.
-        h("span", { className: "rc-result" }),
+        h("button", { type: "button", disabled: state.busy, onClick: () => void save() }, "Save"),
+        mark
+          ? h("span", { className: `rc-result rc-result-${mark.tone}` }, mark.text)
+          : h("span", { className: "rc-result" }),
       ),
     ),
   );
