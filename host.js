@@ -32,6 +32,14 @@ export const inject = [
 
 const CLIENT_NAME = "rembric-dsh";
 const CREDENTIAL_REF = "REMBRIC_API_TOKEN";
+
+// Ambient credential layers named by the credentials provider: the process
+// environment and the dotenv files. Anything else the provider reports as a
+// source — "file" (the local provider's writable store) or a future
+// "keychain" — is treated as the store. The assumption is documented here
+// rather than hard-coded to "file" so a new store backend still reads as
+// "store" instead of silently degrading to "env".
+const AMBIENT_CREDENTIAL_SOURCES = new Set(["env", "project-env", "user-env"]);
 const DISCOVERY_TIMEOUT_MS = 10_000;
 const FAILURE_COOLDOWN_MS = 30_000;
 const DEFAULT_SERVER_URL = "http://127.0.0.1:8790";
@@ -142,11 +150,9 @@ export async function resolveToken(ctx, env = process.env) {
   try {
     const resolved = await ctx.credentials.resolve(CREDENTIAL_REF);
     if (resolved && typeof resolved.value === "string" && resolved.value.trim()) {
-      // 'file' is the provider-managed writable store; 'env', 'project-env'
-      // and 'user-env' are all ambient layers.
       return {
         value: resolved.value.trim(),
-        source: resolved.source === "file" ? "store" : "env",
+        source: AMBIENT_CREDENTIAL_SOURCES.has(resolved.source) ? "env" : "store",
       };
     }
   } catch {
@@ -200,10 +206,11 @@ export function classifyConnectionFailure(error) {
 }
 
 // The single shared connection check (CONTEXT.md "Connection check"): ask the
-// Rembric server to accept the token and list its tools. /rembric-login,
-// /rembric-status and the settings card all probe through here so every
-// surface reports the same failure wording. fetchImpl is injectable so tests
-// run without a network.
+// Rembric server to accept the token and list its tools. /rembric-login and
+// the settings card probe through here so every probing surface reports the
+// same failure wording. /rembric-status deliberately does NOT probe — it
+// reports cached session state (toolCount captured at setup). fetchImpl is
+// injectable so tests run without a network.
 export async function checkConnection({
   serverUrl,
   token,
@@ -518,7 +525,7 @@ export function apply(ctx, config) {
     warnOnce: (message) => warnOnce(ctx, message),
     resolveToken: () => resolveToken(ctx),
     saveToken: (token) => ctx.credentials.set(CREDENTIAL_REF, token),
-    checkConnection: (options) => checkConnection(options),
+    checkConnection,
     serverInfo: () => resolveServerUrl(config),
   };
 

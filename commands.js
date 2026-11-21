@@ -300,7 +300,10 @@ async function handleLogin(deps, invocation) {
   try {
     await deps.saveToken(token);
   } catch (error) {
-    return err(`could not save the token: ${errorText(error)}`);
+    // A provider error could embed the submitted value, so the chat reply
+    // stays generic; the real reason goes to the host log instead.
+    deps.warnOnce(`could not save the token: ${errorText(error)}`);
+    return err("could not save the token (the host log has the reason)");
   }
   const info = deps.serverInfo();
   const check = await deps.checkConnection({ serverUrl: info.url, token });

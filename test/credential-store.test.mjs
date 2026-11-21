@@ -287,6 +287,17 @@ describe("[E] resolveToken (credential reference REMBRIC_API_TOKEN)", () => {
     return { credentials: { resolve: resolveImpl } };
   }
 
+  it("an unknown provider source is treated as the store, not as the environment", async () => {
+    // The plugin names only the ambient layers ("env", "project-env",
+    // "user-env"); anything else the provider reports — "file" today, a
+    // future "keychain" — is the provider's own store.
+    const ctx = ctxWith(async () => ({ value: "vault-token", source: "keychain" }));
+    expect(await resolveToken(ctx, { REMBRIC_API_TOKEN: "ambient-token" })).toEqual({
+      value: "vault-token",
+      source: "store",
+    });
+  });
+
   it("store value wins over the ambient variable", async () => {
     const ctx = ctxWith(async () => ({ value: "stored-token", source: "file" }));
     expect(await resolveToken(ctx, { REMBRIC_API_TOKEN: "ambient-token" })).toEqual({
@@ -356,6 +367,7 @@ describe("[E] resolveToken (credential reference REMBRIC_API_TOKEN)", () => {
 describe("[F] /rembric-login", () => {
   function setup({ check = { ok: true, toolCount: 3 }, saveThrows = null } = {}) {
     const calls = { save: [], check: [] };
+    const warned = [];
     const deps = {
       saveToken: async (t) => {
         if (saveThrows) throw saveThrows;
@@ -366,7 +378,7 @@ describe("[F] /rembric-login", () => {
         return check;
       },
       serverInfo: () => ({ url: "http://s:1", origin: "config" }),
-      warnOnce: () => {},
+      warnOnce: (message) => warned.push(message),
     };
     const registered = new Map();
     const ctx = {
@@ -378,7 +390,7 @@ describe("[F] /rembric-login", () => {
       },
     };
     registerRembricCommands(ctx, deps);
-    return { calls, login: registered.get("rembric-login") };
+    return { calls, warned, login: registered.get("rembric-login") };
   }
 
   it("is registered with input hint <token> and recordInput:false", () => {
@@ -429,11 +441,15 @@ describe("[F] /rembric-login", () => {
     expect(calls.save).toEqual(["tok-42"]);
   });
 
-  it("save failure → error, no check attempted", async () => {
-    const { calls, login } = setup({ saveThrows: new Error("store is read-only") });
+  it("save failure → generic error with no raw-error echo, logged instead, no check attempted", async () => {
+    // A provider error could embed the submitted value, so the chat reply
+    // stays generic; the real reason goes to the host log via warnOnce.
+    const { calls, login, warned } = setup({ saveThrows: new Error("vault rejected tok-42") });
     const res = await login.handler({ rawInput: "tok-42" });
     expect(res.kind).toBe("error");
-    expect(res.text).toContain("store is read-only");
+    expect(res.text).toContain("could not save the token");
+    expect(res.text).not.toContain("tok-42");
+    expect(warned.some((m) => m.includes("vault rejected tok-42"))).toBe(true);
     expect(calls.check.length).toBe(0);
   });
 });
