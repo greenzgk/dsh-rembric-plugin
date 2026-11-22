@@ -69,7 +69,35 @@ A synthetic message injected into the agent's conversation to steer it: recall
 hints, session-id reminders, post-compaction recovery.
 _Avoid_: System message
 
+**Credential reference**:
+The named slot `REMBRIC_API_TOKEN` in DSH's credential store; the plugin's only
+source for its token, resolved through `ctx.credentials` with the ambient
+environment as a fallback.
+_Avoid_: API key setting, token record
+
+**Token source**:
+Where the token came from on the last resolution — `store`, `env`, `none`, or
+`request` (carried in the verify request itself and persisted to the store on
+success, after which the effective source is `store`); `/rembric-status`
+reports the first three so a missing GUI setup is distinguishable from a
+stale shell export.
+_Avoid_: Origin, provider
+
+**Connection check**:
+The single probe that asks the Rembric server to accept the token and list its
+tools; the settings card and `/rembric-login` share it. `/rembric-status` does
+not probe — it reports the cached session state captured at setup.
+_Avoid_: Handshake, ping
+
+**Settings card**:
+The plugin's own block on the DSH settings page; it persists the server URL to
+config, while its token field writes only to the credential reference — never
+to config, because anything persisted to config is readable by every browser
+that can open that page.
+_Avoid_: Config form, preferences
+
 **Project slug**:
-The Rembric project a session belongs to, resolved per session from the
-working directory.
+The Rembric project a session belongs to, resolved per session from the working
+directory (`.rembric`, then `REMBRIC_PROJECT_SLUG`, then the server's repository
+binding). Never pinned by plugin config.
 _Avoid_: Project id, namespace

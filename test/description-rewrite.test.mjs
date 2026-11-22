@@ -1,5 +1,5 @@
 // test/description-rewrite.test.mjs — Regression tests for the description
-// rewriter exported from host.js (ticket #11, spec #2).
+// rewriter exported from host.js.
 //
 // The bug: the rewriter stringified ANY value sitting under a `description`
 // key, so the JSON-Schema object of the `description` PARAMETER of
@@ -9,8 +9,8 @@
 // rewritten; every non-string value passes through untouched.
 //
 // Contract under test: input tree -> output tree of the exported pure
-// functions. Expected values are literals from the spec, never recomputed
-// by the code under test.
+// functions. Expected values are literals, never recomputed by the code
+// under test.
 
 import { describe, it, expect } from "vite-plus/test";
 

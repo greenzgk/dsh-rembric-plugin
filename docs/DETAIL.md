@@ -20,15 +20,15 @@ project-resolution rules, adapted to how DSH bundles and services work.
   what to save, and how to summarize — without you writing any of that.
 - **Picks the project per session** from the working directory, exactly like the Pi
   client: a `.rembric` file (walked up to the repo root) wins, then the
-  `REMBRIC_PROJECT_SLUG` env / `projectSlug` config, then — inside a git repo —
-  the admin-bound repository binding. It never silently falls back to the `default`
-  project inside a git repo.
+  `REMBRIC_PROJECT_SLUG` env var, then — inside a git repo — the admin-bound
+  repository binding. It never silently falls back to the `default` project
+  inside a git repo. The plugin config never pins a project.
 - **Captures every session** to the server: prompts, assistant messages, turn
   reports, and summaries (see below). The plugin holds no business logic of its
   own; the server is the source of truth.
 - **Injects recall nudges** before the agent's next step, and answers the user
-  directly through the `/recall` `/context` `/remember` `/summary` slash
-  commands.
+  directly through the `/recall` `/context` `/remember` `/summary`
+  `/rembric-login` `/rembric-status` slash commands.
 - **Passes every tool call through** to the server with the original dotted tool
   name. When a tool's schema declares a `sessionId` and the model omitted it, the
   DSH session id is injected automatically (only for registered sessions).
@@ -145,32 +145,40 @@ the dotted→underscored tool-name rewrite.
 Set in the bundle's `cordis.patch.yml` row (editable after install):
 
 - `serverUrl` — Rembric base URL. Falls back to `REMBRIC_SERVER_URL`, then
-  `http://127.0.0.1:8790`.
-- `projectSlug` — default project for sessions whose working directory has no
-  `.rembric` file. Behaves like `REMBRIC_PROJECT_SLUG` (lower precedence than a
-  `.rembric` file). Remove it to force per-directory resolution everywhere.
+  `http://127.0.0.1:8790`. This is the only live config field: the token and
+  the project slug are deliberately not config.
+
+The settings card reads the effective address from `/plugins/rembric/config`
+and saves a new one there through the config editor; hand-editing the row is
+still valid for defaults.
 
 ## Token
 
-The API token is **not** stored in config. The plugin reads it from:
+The API token is **not** stored in config. It is a credential reference —
+`REMBRIC_API_TOKEN` in DSH's credential store:
 
-1. The DSH **`rembric/token` credential** (preferred — survives across processes).
-2. The `REMBRIC_API_TOKEN` environment variable (fallback — only works if the
-   process that launches DSH has it exported).
+1. Set it from the chat with `/rembric-login <token>`. The token is saved to
+   the credential store via `ctx.credentials.set`, verified against the server
+   before the command reports success, and never echoed back.
+2. An exported `REMBRIC_API_TOKEN` environment variable is an ambient fallback
+   only. The stored credential wins when both exist. An empty stored value is
+   treated as absent.
 
-The DSH GUI launched from the desktop does **not** inherit your shell's
-`REMBRIC_API_TOKEN`, so put the token in the `rembric/token` credential.
+The plugin never writes the token to the environment. The DSH GUI launched from
+the desktop does **not** inherit your shell's `REMBRIC_API_TOKEN`, so in the
+GUI use `/rembric-login`. `/rembric-status` reports the token source
+(store / env / none).
 
 ## Project resolution rules
 
 | Situation                                                                      | Result                                                                                                                         |
 | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
 | `.rembric` file with `PROJECT_SLUG=…` in the tree (walked up to the repo root) | that project                                                                                                                   |
-| `REMBRIC_PROJECT_SLUG` / `projectSlug` set                                     | that project (an explicit slug wins; a mismatch with the repo binding is reported as a conflict but the explicit slug is used) |
+| `REMBRIC_PROJECT_SLUG` set                                                     | that project (an explicit slug wins; a mismatch with the repo binding is reported as a conflict but the explicit slug is used) |
 | Inside a git repo, repo bound to a project                                     | the bound project                                                                                                              |
 | Inside a git repo, repo not bound                                              | **off** for the session: one warning line, the Rembric tools are not registered                                                |
 | Not in git, no slug                                                            | the `default` project                                                                                                          |
-| No token at all                                                                | plugin stays off, one warning line                                                                                             |
+| No token at all                                                                | plugin stays off, one warning line; set the token with `/rembric-login <token>`                                                |
 
 ## Status
 

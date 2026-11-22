@@ -1,4 +1,4 @@
-// commands.js — Phase 3 wiring for the Rembric DSH plugin.
+// commands.js — slash commands, file-linked recall and subagent learnings.
 //
 // Three pieces, all registered from host.js apply():
 //
@@ -290,6 +290,73 @@ async function handleSummary(deps, invocation) {
   }
 }
 
+// /rembric-login <token> — save the token to the credential store, then
+// verify it against the server BEFORE reporting success. The
+// token is never echoed back in any reply. On a failed check the token stays
+// saved but the failure is reported with the shared classifier wording.
+async function handleLogin(deps, invocation) {
+  const token = String(invocation?.rawInput ?? "").trim();
+  if (!token) return err("usage: /rembric-login <token>");
+  try {
+    await deps.saveToken(token);
+  } catch (error) {
+    // A provider error could embed the submitted value, so the chat reply
+    // stays generic; the real reason goes to the host log instead.
+    deps.warnOnce(`could not save the token: ${errorText(error)}`);
+    return err("could not save the token (the host log has the reason)");
+  }
+  const info = deps.serverInfo();
+  const check = await deps.checkConnection({ serverUrl: info.url, token });
+  if (!check.ok) {
+    return err(`token saved, but the connection check failed: ${check.message}`);
+  }
+  return {
+    kind: "success",
+    text: `rembric: token saved — the server accepted it (${check.toolCount} tools available). Never shown again; manage it with /rembric-status.`,
+  };
+}
+
+// /rembric-status — honest readout: token source, effective server URL and
+// where it came from, resolved project slug and its resolution method, plugin
+// mode, and tool count. A missing token is reported as an absence, never as a
+// connection error, and no connection attempt is made.
+const SLUG_SOURCE_LABELS = {
+  rembric: ".rembric file",
+  "rembric-root": ".rembric file",
+  "rembric-nested": ".rembric file",
+  env: "REMBRIC_PROJECT_SLUG",
+  fingerprint: "repository binding",
+};
+
+const SERVER_ORIGIN_LABELS = {
+  config: "config",
+  env: "REMBRIC_SERVER_URL",
+  default: "default",
+};
+
+async function handleStatus(deps, invocation) {
+  const token = await deps.resolveToken();
+  const info = deps.serverInfo();
+  const state = deps.getStateForAgent(invocation?.agent);
+  const lines = ["rembric: status"];
+  lines.push(
+    token.value ? `Token: ${token.source}` : "Token: none — set it with /rembric-login <token>",
+  );
+  const originLabel = SERVER_ORIGIN_LABELS[info.origin] ?? info.origin;
+  lines.push(`Server: ${info.url} (${originLabel})`);
+  if (state && state.slug) {
+    const label = SLUG_SOURCE_LABELS[state.slugSource] ?? "unknown source";
+    lines.push(`Project: ${state.slug} (${label})`);
+  } else {
+    lines.push("Project: not resolved for this session");
+  }
+  lines.push(
+    state ? `Mode: on (${state.mode})` : token.value ? "Mode: off" : "Mode: off (no token)",
+  );
+  lines.push(`Tools: ${state && state.toolCount != null ? state.toolCount : 0}`);
+  return { kind: "success", text: lines.join("\n") };
+}
+
 // ---- public wiring -----------------------------------------------------------
 
 // Registers the four commands globally (plain plugin context). Handlers resolve
@@ -318,6 +385,20 @@ export function registerRembricCommands(ctx, deps) {
       name: "summary",
       description: "Flush the current session summary to Rembric now.",
       handler: (invocation) => handleSummary(deps, invocation),
+    },
+    {
+      name: "rembric-login",
+      description:
+        "Save the Rembric API token to DSH's credential store and verify it against the server.",
+      input: { hint: "<token>" },
+      recordInput: false,
+      handler: (invocation) => handleLogin(deps, invocation),
+    },
+    {
+      name: "rembric-status",
+      description:
+        "Show Rembric token source, effective server, resolved project, mode, and tool count.",
+      handler: (invocation) => handleStatus(deps, invocation),
     },
   ];
 

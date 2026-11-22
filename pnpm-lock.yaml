@@ -17,6 +17,9 @@ importers:
 
   .:
     devDependencies:
+      '@types/react':
+        specifier: ^19.3.0
+        version: 19.3.0
       node:
         specifier: runtime:24.22.1
         version: runtime:24.22.1
@@ -361,6 +364,9 @@ packages:
   '@types/estree@1.0.10':
     resolution: {integrity: sha512-lTyOMnOcmRBzdCv6/4zUZCrEhV0xrqQiUZBZtVcbmLHBXKLnN8q89v/wKRF/Q0HbwVsqbIG3o5HDoFl9sduM+g==}
 
+  '@types/react@19.3.0':
+    resolution: {integrity: sha512-N0rFCuH9YoxG9/m61l9MfpJKfmLOVU0em7ipIz6TRgSSkvReLB9vL85GB+yr8Bs5leqpvg96JSwF4ZS1s4viQg==}
+
   '@vitest/browser-preview@5.1.0':
     resolution: {integrity: sha512-z9SbodBSMoJtYy5VTCaSP5SSZfNYRlfIlR0P/uH1PAuhUJbstSyOYvxXCYmqG+EemIiZzd3uGUtREX5zbXLR8A==}
     peerDependencies:
@@ -610,6 +616,9 @@ packages:
 
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
+
+  csstype@3.2.4:
+    resolution: {integrity: sha512-PoKaoPzQapnEoqUSnHx1u6W6ku8CVEgKsnpmmzU3m1nwkidpPBQ8V/Zq2+bWNrsOKoKLwTGdbx6xF7BXP1zLVQ==}
 
   dequal@2.0.3:
     resolution: {integrity: sha512-0je+qPKHEMohvfRTCEo3CrPG6cAzAYgmzKyxRiYSSDkS6eGJdyVJm7WaYA5ECaAD9wLB2T4EEeymA5aFVcYXCA==}
@@ -1245,6 +1254,10 @@ snapshots:
 
   '@types/estree@1.0.10': {}
 
+  '@types/react@19.3.0':
+    dependencies:
+      csstype: 3.2.4
+
   '@vitest/browser-preview@5.1.0(@voidzero-dev/vite-plus-core@1.6.0)(vitest@5.1.0)':
     dependencies:
       '@testing-library/dom': 10.4.2
@@ -1406,6 +1419,8 @@ snapshots:
   chai@6.3.0: {}
 
   convert-source-map@2.0.0: {}
+
+  csstype@3.2.4: {}
 
   dequal@2.0.3: {}
 
