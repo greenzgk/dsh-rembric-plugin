@@ -328,6 +328,28 @@ describe("verify route success", () => {
     expect(payload.tokenSource).toBe("request");
     expect(seen[0].auth).toBe("Bearer fresh-tok-2");
   });
+
+  it("403 (no default access) → accepted, no tool count claimed, and the request token persists (spec #26 T5)", async () => {
+    const seen = [];
+    const fetchImpl = async (url, opts) => {
+      const body = JSON.parse(opts.body);
+      seen.push({ url, auth: opts.headers.Authorization, method: body.method });
+      return httpError(403);
+    };
+    const { payload, credentialWrites } = await postVerify(
+      { serverUrl: "http://memory.test", token: "scoped-tok-3" },
+      {},
+      fetchImpl,
+    );
+    expect(payload).toEqual({
+      ok: true,
+      serverName: null,
+      toolCount: null,
+      tokenSource: "request",
+    });
+    expect(seen[0].method).toBe("initialize");
+    expect(credentialWrites).toEqual([["REMBRIC_API_TOKEN", "scoped-tok-3"]]);
+  });
 });
 
 describe("verify route failure classes", () => {
@@ -337,12 +359,6 @@ describe("verify route failure classes", () => {
       initialize: () => httpError(401),
       kind: "rejected-token",
       message: "the server rejected the token (HTTP 401)",
-    },
-    {
-      name: "no project access",
-      initialize: () => httpError(403),
-      kind: "no-project-access",
-      message: "the token has no access to this project (HTTP 403)",
     },
     {
       name: "no MCP endpoint",

@@ -1,7 +1,8 @@
 // Rembric memory plugin for DeepSeek Harness.
 //
-// Mirrors the upstream Rembric Pi plugin: discovers the Rembric MCP tool set once,
-// registers every tool under an underscored name on each agent, and forwards the
+// Mirrors the upstream Rembric Pi plugin: discovers the Rembric MCP tool set on the
+// session's own project endpoint (cached per endpoint, never the bare /mcp), registers
+// every tool under an underscored name on each agent, and forwards the
 // server's usage crib-sheet into the system prompt. Project selection follows the
 // working directory (.rembric file / env / git binding), exactly like the Pi client.
 //
@@ -43,7 +44,6 @@ const CREDENTIAL_REF = "REMBRIC_API_TOKEN";
 // "store" instead of silently degrading to "env".
 const AMBIENT_CREDENTIAL_SOURCES = new Set(["env", "project-env", "user-env"]);
 const DISCOVERY_TIMEOUT_MS = 10_000;
-const FAILURE_COOLDOWN_MS = 30_000;
 const DEFAULT_SERVER_URL = "http://127.0.0.1:8790";
 
 // Recursively rewrite every "description" string in a JSON Schema so the model
@@ -207,10 +207,12 @@ export function classifyConnectionFailure(error) {
   return { kind: "unreachable", message: "the host could not be reached" };
 }
 
-// The single shared connection check (CONTEXT.md "Connection check"): ask the
-// Rembric server to accept the token and list its tools. /rembric-login and
+// The single shared connection check (CONTEXT.md "Connection check"): an
+// authentication probe — does the server accept this token. /rembric-login and
 // the settings card probe through here so every probing surface reports the
-// same failure wording. /rembric-status deliberately does NOT probe — it
+// same verdicts: authentication rejection → invalid, project-access rejection
+// → accepted without tool count, success → accepted with the discovered tool
+// count and server name. /rembric-status deliberately does NOT probe — it
 // reports cached session state (toolCount captured at setup). fetchImpl is
 // injectable so tests run without a network.
 export async function checkConnection({
@@ -226,41 +228,53 @@ export async function checkConnection({
   }
   const client = createMcpClient(buildEndpoint(serverUrl, slug), trimmed, null, fetchImpl);
   const signal = AbortSignal.timeout(timeoutMs);
+  let initResult = null;
   try {
-    const initResult = await client.initialize(signal);
+    initResult = await client.initialize(signal);
     const tools = await client.listTools(signal);
     return { ok: true, toolCount: tools.length, serverName: initResult?.serverInfo?.name ?? null };
   } catch (error) {
-    return { ok: false, ...classifyConnectionFailure(error) };
+    const failure = classifyConnectionFailure(error);
+    // Spec #26 T5: this check answers "is the token valid", not "can it see
+    // the default project". A project-access rejection proves the token
+    // authenticated — only access was refused — so it counts as accepted,
+    // with the server name from the handshake when there was one.
+    if (failure.kind === "no-project-access") {
+      return { ok: true, toolCount: null, serverName: initResult?.serverInfo?.name ?? null };
+    }
+    return { ok: false, ...failure };
   }
 }
 
-// ---- global discovery cache -------------------------------------------------
+// ---- per-endpoint discovery cache --------------------------------------------
+// Discovery belongs to the session's resolved project (spec #26 T4): tools and
+// crib-sheet are fetched from the session's own project endpoint, never from the
+// bare /mcp endpoint (the implicit `default`). Entries are keyed by endpoint and
+// shared by sessions resolving to the same project; concurrent sessions on one
+// endpoint share the in-flight promise. A failed discovery is NOT cached — the
+// next session retries immediately (the old global failure cooldown is gone).
 
-let discovery = null; // { tools, instructions }
-let discoveryPromise = null;
-let failedAt = 0;
+const discoveryCache = new Map(); // endpoint -> Promise<{ tools, instructions }>
 
-async function ensureDiscovery(serverUrl, token) {
-  if (discovery) return discovery;
-  if (Date.now() - failedAt < FAILURE_COOLDOWN_MS) {
-    throw new Error("Rembric discovery is cooling down after a recent failure");
-  }
-  if (!discoveryPromise) {
-    discoveryPromise = (async () => {
-      const client = createMcpClient(buildEndpoint(serverUrl, null), token, null);
+function ensureDiscovery(serverUrl, token, slug) {
+  const endpoint = buildEndpoint(serverUrl, slug);
+  let pending = discoveryCache.get(endpoint);
+  if (!pending) {
+    pending = (async () => {
+      // Session-agnostic request: no fingerprint header — a shared discovery must
+      // not carry one session's repository identity.
+      const client = createMcpClient(endpoint, token, null);
       const signal = AbortSignal.timeout(DISCOVERY_TIMEOUT_MS);
       await client.initialize(signal);
       const tools = await client.listTools(signal);
-      discovery = { tools, instructions: client.instructions() };
-      return discovery;
-    })().catch((error) => {
-      failedAt = Date.now();
-      discoveryPromise = null;
-      throw error;
+      return { tools, instructions: client.instructions() };
+    })();
+    discoveryCache.set(endpoint, pending);
+    pending.catch(() => {
+      if (discoveryCache.get(endpoint) === pending) discoveryCache.delete(endpoint);
     });
   }
-  return discoveryPromise;
+  return pending;
 }
 
 // Resolve a tool name for a direct client.callTool(). Commands are written with
@@ -268,9 +282,11 @@ async function ensureDiscovery(serverUrl, token) {
 // but the MCP server only knows the name it advertised at discovery — dotted for
 // Rembric (`memory.search`). Try the given name, then its dotted form, then its
 // underscored form, so the call works whichever convention the server uses.
-function resolveToolName(preferred) {
+// The candidate set is the CALLING session's own discovered tools (spec #26 T4):
+// one project's tool set must never rename another project's calls.
+function resolveToolName(preferred, state) {
   const name = String(preferred ?? "");
-  const tools = discovery?.tools ?? [];
+  const tools = state?.tools ?? [];
   if (tools.length === 0) return name;
   const names = new Set(tools.map((tool) => tool?.name).filter(Boolean));
   if (names.has(name)) return name;
@@ -295,6 +311,25 @@ function warnOnce(ctx, message) {
   } catch {
     // logger unavailable; nothing else to do.
   }
+}
+
+// Off-session system-prompt notice (spec #26): project resolution already
+// produced a human-readable reason naming both enable paths; the notice appends
+// the standing rule that ends every off notice — the model must surface the
+// state to the user but never pick the project itself. The fallback keeps both
+// enable paths in the text even if the resolver ever omits its message.
+const OFF_NOTICE_GUARD =
+  "Tell the user about this in your first reply. Do not create or edit a `.rembric` file yourself: " +
+  "where a workspace's memories live is the user's decision. Only do it when the user explicitly asks, " +
+  "and ask them for the project slug first.";
+
+function offNoticeText(resolved) {
+  const reason =
+    resolved.message ??
+    "Rembric memory is off for this session: no project was chosen — add a `.rembric` file " +
+      "containing PROJECT_SLUG=<slug> in this session's starting directory, or set " +
+      "REMBRIC_PROJECT_SLUG=<slug> in the environment.";
+  return `${reason}\n\n${OFF_NOTICE_GUARD}`;
 }
 
 function buildToolDef(tool, client, stateRef) {
@@ -330,24 +365,6 @@ async function setupAgent(ctx, config, agent) {
 
   const { url: serverUrl } = resolveServerUrl(config);
   const { value: token } = await resolveToken(ctx);
-  if (!token) {
-    warnOnce(
-      ctx,
-      "off — no token. Set one with /rembric-login <token> or export REMBRIC_API_TOKEN.",
-    );
-    return;
-  }
-
-  let disc;
-  try {
-    disc = await ensureDiscovery(serverUrl, token);
-  } catch (error) {
-    warnOnce(
-      ctx,
-      `off — discovery failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return;
-  }
 
   let cwd;
   try {
@@ -356,6 +373,11 @@ async function setupAgent(ctx, config, agent) {
     cwd = process.cwd();
   }
 
+  // Resolve the project BEFORE touching the server (spec #26): an off session
+  // must make no request at all, so discovery and the token gate both move
+  // behind this check. Outside git resolution needs no token — the mode is
+  // known from the directory alone; inside git the resolver uses the token
+  // when present and reports `refused`/no_credentials when not.
   let resolved;
   try {
     resolved = await resolveProject({
@@ -372,19 +394,83 @@ async function setupAgent(ctx, config, agent) {
     return;
   }
 
-  if (resolved.mode === "refused") {
-    warnOnce(ctx, resolved.message ?? "off — repository could not be resolved to a project");
+  const sid = agent.session.id;
+
+  // Off / non-project sessions (no_project / unbound / refused): memory is off
+  // for the whole session lifetime. Register a state so slash commands can
+  // report the mode and its reason, but with no client/core and zero tools;
+  // then stop — no discovery, no connection, no request.
+  if (resolved.mode !== "project") {
+    const state = {
+      fiber: null,
+      client: null,
+      slug: null,
+      slugSource: null,
+      mode: resolved.mode,
+      reason: resolved.reason ?? null,
+      message: resolved.message ?? null,
+      toolCount: 0,
+      core: null,
+      sid,
+      cwd,
+      agent,
+    };
+    // The diagnostic line still goes to the plugin log.
+    warnOnce(ctx, resolved.message ?? `off — no project (${resolved.mode})`);
+    // Only a no_project session gets the system-prompt off notice: unbound and
+    // refused are repository-binding states with their own remedy wording, not
+    // the "choose a project" prompt.
+    if (resolved.mode === "no_project") {
+      try {
+        state.fiber = agent.ctx.inject(["systemPrompt"], (scope) => {
+          scope.systemPrompt.section({
+            name: "context:rembric",
+            order: 1000,
+            text: offNoticeText(resolved),
+            interpolate: false,
+          });
+        });
+      } catch (error) {
+        warnOnce(
+          ctx,
+          `off notice unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    agentStates.set(agent, state);
+    sessionIndex.set(sid, state);
     return;
   }
-  if (resolved.mode === "unbound") {
+
+  if (!token) {
     warnOnce(
       ctx,
-      resolved.message ?? "repository is not bound to a project; memory off for this session",
+      "off — no token. Set one with /rembric-login <token> or export REMBRIC_API_TOKEN.",
     );
     return;
   }
 
   const slug = resolved.slug ?? null;
+
+  // Discover on the session's own project endpoint (spec #26 T4) — never the bare
+  // /mcp. A cached result means this project was already discovered; a failed
+  // discovery is retried by the next session (no cooldown).
+  let disc;
+  try {
+    disc = await ensureDiscovery(serverUrl, token, slug);
+  } catch (error) {
+    warnOnce(
+      ctx,
+      `off — discovery failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return;
+  }
+
+  // Per-agent client for the actual tool calls: this session's own connection,
+  // carrying its fingerprint header. mcp-client is session-stateful — it only
+  // echoes mcp-session-id after its own initialize — so every session handshakes
+  // on its own client. What sharing covers is the discovery RESULT (one tools/list
+  // per endpoint), not this handshake.
   const client = createMcpClient(buildEndpoint(serverUrl, slug), token, resolved.header ?? null);
   try {
     await client.initialize(AbortSignal.timeout(DISCOVERY_TIMEOUT_MS));
@@ -399,7 +485,6 @@ async function setupAgent(ctx, config, agent) {
   // The state object is created before registration so the tool definitions can
   // hold a late-bound reference to it: `core` is filled in after registration and
   // read at execute time by the auto-sessionId seam (withHostSessionId).
-  const sid = agent.session.id;
   // `cwd` and `agent` are needed by the command wiring: file recall resolves
   // candidate paths against the session's working directory and injects hints
   // through the agent. Neither is ever serialized (only the client-name string
@@ -410,6 +495,9 @@ async function setupAgent(ctx, config, agent) {
     slug,
     slugSource: resolved.source ?? null,
     mode: resolved.mode,
+    // This session's discovered tool set — resolveToolName reads it per call so
+    // one project's names never resolve against another project's tools.
+    tools: disc.tools,
     toolCount: disc.tools.length,
     core: null,
     sid,

@@ -56,11 +56,7 @@ function gitEnv() {
 function runGit(cwd, args) {
   return new Promise((done) => {
     execFile("git", args, { cwd, timeout: GIT_TIMEOUT_MS, env: gitEnv() }, (error, stdout) =>
-      done(
-        error
-          ? { ok: false, missing: error.code === "ENOENT", out: "" }
-          : { ok: true, out: String(stdout).trim() },
-      ),
+      done(error ? { ok: false, out: "" } : { ok: true, out: String(stdout).trim() }),
     );
   });
 }
@@ -111,13 +107,19 @@ export function normalizeRemote(raw) {
 
 export async function inspectRepository(startDir) {
   const inside = await runGit(startDir, ["rev-parse", "--is-inside-work-tree"]);
-  if (!inside.ok && inside.missing) {
+  // A failed probe — for ANY reason — is classified by repository-boundary
+  // evidence on disk, never by error text (spec #26 T3): a `.git` ancestor
+  // means the session sits inside a repository whose git is unavailable
+  // (its own cause, reason and remedy downstream); without one the directory
+  // is genuinely outside git. This extends the missing-git-binary case that
+  // already consulted dotGitAncestor to every probe failure.
+  if (!inside.ok) {
     const root = dotGitAncestor(startDir);
     return root
       ? { insideGit: true, root, fingerprint: null, cause: "git_unavailable", remotes: [] }
       : { insideGit: false };
   }
-  if (!inside.ok || inside.out !== "true") return { insideGit: false };
+  if (inside.out !== "true") return { insideGit: false };
 
   const toplevel = await runGit(startDir, ["rev-parse", "--show-toplevel"]);
   const root = toplevel.ok && toplevel.out ? realDirectory(toplevel.out) : realDirectory(startDir);
@@ -200,21 +202,32 @@ function findRembric(projectDir, checkoutRoot) {
   };
 }
 
+// `reason` explains an empty slug so the caller can report why memory is off:
+// "no_choice" (nothing named a project), "invalid_env" (REMBRIC_PROJECT_SLUG set
+// but not a valid slug), "invalid_file" (a .rembric exists but names nothing
+// valid). Only meaningful outside git, where an empty slug means off; inside a
+// repository the binding flow below produces its own reasons.
 export function resolveSlug(projectDir, env = process.env, checkoutRoot = null) {
   const environmentSlug = env.REMBRIC_PROJECT_SLUG;
   const found = findRembric(projectDir, checkoutRoot);
-  if (found.slug) return { slug: found.slug, source: found.source, issue: null };
+  if (found.slug) return { slug: found.slug, source: found.source, reason: null, issue: null };
   if (environmentSlug && SLUG_RE.test(environmentSlug)) {
-    return { slug: environmentSlug, source: "env", issue: found.issue };
+    return { slug: environmentSlug, source: "env", reason: null, issue: found.issue };
   }
   if (environmentSlug) {
     return {
       slug: null,
       source: null,
+      reason: "invalid_env",
       issue: `${environmentSlug} in REMBRIC_PROJECT_SLUG is invalid`,
     };
   }
-  return { slug: null, source: null, issue: found.issue };
+  return {
+    slug: null,
+    source: null,
+    reason: found.source ? "invalid_file" : "no_choice",
+    issue: found.issue,
+  };
 }
 
 export function buildEndpoint(baseUrl, slug) {
@@ -302,6 +315,35 @@ function refusedMessage(serverUrl, result, timeoutMs) {
   }
 }
 
+// Human-readable explanation for an off (no_project) session, one per reason.
+// Each names what failed and how to turn memory on; the system-prompt off notice
+// in host.js reuses this text and appends the standing rule.
+function noProjectMessage(reason, env) {
+  switch (reason) {
+    case "invalid_env":
+      return (
+        `REMBRIC_PROJECT_SLUG="${env.REMBRIC_PROJECT_SLUG}" is not a valid project slug, so it selects ` +
+        "no project, and this directory is not a git repository. Rembric memory is off for this session. " +
+        "To turn it on: fix REMBRIC_PROJECT_SLUG, or add a .rembric file containing PROJECT_SLUG=<slug> " +
+        "in this directory."
+      );
+    case "invalid_file":
+      return (
+        "The .rembric file in this directory does not name a valid project, so no project was chosen, " +
+        "and this directory is not a git repository. Rembric memory is off for this session. " +
+        "To turn it on: fix the .rembric file to contain PROJECT_SLUG=<slug>, or set " +
+        "REMBRIC_PROJECT_SLUG=<slug> in the environment."
+      );
+    default:
+      return (
+        "This directory is not a git repository and no project was chosen — no .rembric file here and " +
+        "no REMBRIC_PROJECT_SLUG in the environment. Rembric memory is off for this session. " +
+        "To turn it on: add a .rembric file containing PROJECT_SLUG=<slug> in this directory, or set " +
+        "REMBRIC_PROJECT_SLUG=<slug> in the environment."
+      );
+  }
+}
+
 function conflictMessage(slug, source, boundSlugs) {
   const from = source === "env" ? "REMBRIC_PROJECT_SLUG" : ".rembric";
   return (
@@ -336,17 +378,36 @@ export async function resolveProject({
   const repository = await inspectRepository(startDir);
 
   if (!repository.insideGit) {
+    // Fail closed (spec #26): outside a git repository the project comes ONLY
+    // from an explicit choice — a .rembric file in the starting directory (wins)
+    // or REMBRIC_PROJECT_SLUG. Nothing valid → mode "no_project": the session is
+    // off and must register no tools and make no request. `default` is never
+    // produced implicitly; an explicit PROJECT_SLUG=default still selects it.
     const selected = resolveSlug(startDir, env, null);
+    if (selected.slug) {
+      return {
+        mode: "project",
+        slug: selected.slug,
+        source: selected.source,
+        issue: selected.issue,
+        repository: null,
+        header: null,
+        conflict: null,
+        reason: null,
+        message: null,
+      };
+    }
+    const reason = selected.reason ?? "no_choice";
     return {
-      mode: selected.slug ? "project" : "default",
-      slug: selected.slug,
-      source: selected.source,
+      mode: "no_project",
+      slug: null,
+      source: null,
       issue: selected.issue,
       repository: null,
       header: null,
       conflict: null,
-      reason: null,
-      message: null,
+      reason,
+      message: noProjectMessage(reason, env),
     };
   }
 

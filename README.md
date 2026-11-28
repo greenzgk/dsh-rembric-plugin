@@ -5,10 +5,11 @@ Persistent shared memory for your DeepSeek Harness agent, backed by a
 the upstream Rembric Pi plugin.
 
 The plugin discovers the full Rembric MCP tool set, registers it on every agent
-under underscored names (`memory_save`, `memory_search`, `memory_context`, …),
-adds the server's usage crib-sheet to the system prompt, captures every session
-to the server, injects recall nudges, and resolves the active project from the
-working directory.
+whose session resolves to a project under underscored names (`memory_save`,
+`memory_search`, `memory_context`, …), adds the server's usage crib-sheet to the
+system prompt, captures every session to the server, injects recall nudges, and
+resolves the active project per session — failing closed with memory off rather
+than guessing a project when nothing names one.
 
 ## What you get
 
@@ -36,7 +37,7 @@ working directory.
   - `/rembric-login <token>` — save the API token to DSH's credential store
     and verify it against the server.
   - `/rembric-status` — show the token source, effective server, resolved
-    project, plugin mode, and tool count.
+    project, plugin mode and its off reason, and tool count.
 
 ## Requirements
 
@@ -47,7 +48,11 @@ working directory.
   when both exist.
 - A Rembric project to write to. Create one with `project_create` or the Rembric
   UI, then point the plugin at it via a `.rembric` file, the
-  `REMBRIC_PROJECT_SLUG` env var, or a git repository binding.
+  `REMBRIC_PROJECT_SLUG` env var, or a git repository binding. Nothing is chosen
+  implicitly: outside git, a session with no `.rembric` file and no valid
+  `REMBRIC_PROJECT_SLUG` runs with memory off. To keep using `default`
+  deliberately, create a `.rembric` file containing `PROJECT_SLUG=default` —
+  that is the supported opt-in.
 
 ## Install
 
@@ -80,8 +85,10 @@ project is resolved per session from the working directory.
 
 Set the token from the chat: `/rembric-login <token>`. It is saved to DSH's
 credential store under `REMBRIC_API_TOKEN` and verified against the server
-before the command reports success. The token is never echoed back and never
-written to the environment.
+before the command reports success. The check validates authentication only: an
+authentication rejection means the token is invalid, while a project-access
+rejection means a valid token without `default` access. The token is never
+echoed back and never written to the environment.
 
 An exported `REMBRIC_API_TOKEN` works as an ambient fallback, but the stored
 credential wins when both exist. The desktop GUI does not inherit your shell

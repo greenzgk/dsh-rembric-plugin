@@ -144,11 +144,11 @@ function withTimeoutSignal(signal, timeoutMs) {
 // ---- MCP call + formatting ---------------------------------------------------
 
 // `preferredName` is the underscored name DSH registers the tool under; the MCP
-// server owns the real (usually dotted) name, so it is resolved through the
-// host's discovery cache before the call goes out.
+// server owns the real (usually dotted) name, so it is resolved against this
+// session's own discovered tools before the call goes out.
 async function callRembric(deps, state, preferredName, args, signal) {
   if (!state || !state.client) throw new Error(NOT_CONNECTED);
-  const name = deps.resolveToolName(preferredName);
+  const name = deps.resolveToolName(preferredName, state);
   const timed = withTimeoutSignal(signal, COMMAND_TIMEOUT_MS);
   try {
     const { text, isError } = await state.client.callTool(name, args ?? {}, timed.signal);
@@ -310,16 +310,24 @@ async function handleLogin(deps, invocation) {
   if (!check.ok) {
     return err(`token saved, but the connection check failed: ${check.message}`);
   }
+  // Spec #26 T5: the check answers "is the token valid". A null tool count
+  // means the server refused the default project for this token but accepted
+  // the token itself — report the verdict, never a bogus tool count.
+  const verdict =
+    check.toolCount == null
+      ? "token is valid; no access to the default project"
+      : `${check.toolCount} tools available`;
   return {
     kind: "success",
-    text: `rembric: token saved — the server accepted it (${check.toolCount} tools available). Never shown again; manage it with /rembric-status.`,
+    text: `rembric: token saved — the server accepted it (${verdict}). Never shown again; manage it with /rembric-status.`,
   };
 }
 
 // /rembric-status — honest readout: token source, effective server URL and
 // where it came from, resolved project slug and its resolution method, plugin
-// mode, and tool count. A missing token is reported as an absence, never as a
-// connection error, and no connection attempt is made.
+// mode and — for an off session — its off reason, and tool count. A missing
+// token is reported as an absence, never as a connection error, and no
+// connection attempt is made. An off session is never reported as `on`.
 const SLUG_SOURCE_LABELS = {
   rembric: ".rembric file",
   "rembric-root": ".rembric file",
@@ -347,12 +355,17 @@ async function handleStatus(deps, invocation) {
   if (state && state.slug) {
     const label = SLUG_SOURCE_LABELS[state.slugSource] ?? "unknown source";
     lines.push(`Project: ${state.slug} (${label})`);
-  } else {
+  } else if (state && state.mode === "no_project") {
+    lines.push(`Project: no project (${state.reason ?? "no_choice"})`);
+  } else if (!state) {
     lines.push("Project: not resolved for this session");
   }
-  lines.push(
-    state ? `Mode: on (${state.mode})` : token.value ? "Mode: off" : "Mode: off (no token)",
-  );
+  if (state) {
+    lines.push(state.mode === "project" ? "Mode: on (project)" : `Mode: off (${state.mode})`);
+    if (state.mode !== "project" && state.reason) lines.push(`Reason: ${state.reason}`);
+  } else {
+    lines.push(token.value ? "Mode: off" : "Mode: off (no token)");
+  }
   lines.push(`Tools: ${state && state.toolCount != null ? state.toolCount : 0}`);
   return { kind: "success", text: lines.join("\n") };
 }
