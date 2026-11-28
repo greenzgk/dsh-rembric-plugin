@@ -455,10 +455,21 @@ async function setupAgent(ctx, config, agent) {
     return;
   }
 
-  // Per-agent client for the actual tool calls: carries this session's own
-  // fingerprint header. It is not re-initialized — discovery already opened the
-  // endpoint, and re-initializing would defeat the shared per-endpoint discovery.
+  // Per-agent client for the actual tool calls: this session's own connection,
+  // carrying its fingerprint header. mcp-client is session-stateful — it only
+  // echoes mcp-session-id after its own initialize — so every session handshakes
+  // on its own client. What sharing covers is the discovery RESULT (one tools/list
+  // per endpoint), not this handshake.
   const client = createMcpClient(buildEndpoint(serverUrl, slug), token, resolved.header ?? null);
+  try {
+    await client.initialize(AbortSignal.timeout(DISCOVERY_TIMEOUT_MS));
+  } catch (error) {
+    warnOnce(
+      ctx,
+      `off — connect to project '${slug ?? "default"}' failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return;
+  }
 
   // The state object is created before registration so the tool definitions can
   // hold a late-bound reference to it: `core` is filled in after registration and

@@ -8,6 +8,7 @@
 // fake harness ctx with a spy on globalThis.fetch that records every request the
 // plugin actually makes. Prior art: test/host-fail-closed.test.mjs.
 
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,6 +44,25 @@ const created = [];
 function tempSlugDir(slug) {
   const dir = mkdtempSync(join(tmpdir(), "rembric-disc-"));
   writeFileSync(join(dir, ".rembric"), `PROJECT_SLUG=${slug}\n`);
+  created.push(dir);
+  return dir;
+}
+
+function git(dir, ...args) {
+  return execFileSync(
+    "git",
+    ["-c", "user.email=t@example.com", "-c", "user.name=T", "-C", dir, ...args],
+    { encoding: "utf8" },
+  ).trim();
+}
+
+// A real single-commit git repo: resolution inside it posts /api/repositories/resolve,
+// which the spy answers as bound — so the session gets the repository fingerprint
+// header, unlike the non-git .rembric dirs above.
+function gitRepoDir() {
+  const dir = mkdtempSync(join(tmpdir(), "rembric-disc-git-"));
+  git(dir, "init", "-q");
+  git(dir, "commit", "-q", "--allow-empty", "-m", "one");
   created.push(dir);
   return dir;
 }
@@ -116,17 +136,24 @@ function makeRecordingAgent() {
 // tool name) is recorded. failNext() forces the next N matching requests to answer
 // HTTP 401, simulating a failing endpoint.
 
-function makeFetchSpy(routes) {
+function makeFetchSpy(routes, { resolvePayload } = {}) {
   const calls = [];
   const failures = new Map(); // `${pathname} ${method}` -> remaining forced failures
+  let sidSeq = 0;
   const fetchSpy = async (url, opts = {}) => {
     const urlStr = String(url);
     const pathname = new URL(urlStr).pathname;
     const body = opts.body ? JSON.parse(opts.body) : {};
     const method = body.method ?? null;
-    calls.push({ url: urlStr, pathname, method, name: body.params?.name ?? null });
+    // Request headers are recorded too: tests assert the mcp-session-id echo and
+    // the per-session X-Rembric-Repo-Fingerprint header.
+    const headers = Object.fromEntries(
+      Object.entries(opts.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]),
+    );
+    const call = { url: urlStr, pathname, method, name: body.params?.name ?? null, headers };
+    calls.push(call);
     if (pathname === "/api/repositories/resolve") {
-      const payload = { ok: true, outcome: "unbound", reason: "not_bound" };
+      const payload = resolvePayload ?? { ok: true, outcome: "unbound", reason: "not_bound" };
       return {
         ok: true,
         status: 200,
@@ -157,7 +184,11 @@ function makeFetchSpy(routes) {
       };
     }
     let result = {};
+    let issuedSid = null;
     if (method === "initialize") {
+      sidSeq += 1;
+      issuedSid = `sess-${sidSeq}`;
+      call.issuedSid = issuedSid;
       result = { protocolVersion: "2025-06-18", instructions: route.instructions };
     } else if (method === "tools/list") {
       result = { tools: route.tools };
@@ -171,7 +202,10 @@ function makeFetchSpy(routes) {
     return {
       ok: true,
       status: 200,
-      headers: { get: () => null },
+      headers: {
+        get: (name) =>
+          issuedSid && String(name).toLowerCase() === "mcp-session-id" ? issuedSid : null,
+      },
       json: async () => jsonrpc,
       text: async () => JSON.stringify(jsonrpc),
     };
@@ -187,9 +221,9 @@ function makeFetchSpy(routes) {
 
 const realFetch = globalThis.fetch;
 
-function startPlugin(routes) {
+function startPlugin(routes, opts = {}) {
   const { ctx, registered, warnings, dirs } = makeApplyCtx();
-  const spy = makeFetchSpy(routes);
+  const spy = makeFetchSpy(routes, opts);
   globalThis.fetch = spy.fetch;
   apply(ctx, { serverUrl: SERVER_URL });
   return { ctx, registered, warnings, dirs, spy, calls: spy.calls };
@@ -270,8 +304,12 @@ describe("discovery happens on the session's own project endpoint", () => {
     const run = startPlugin(routes());
     const first = await addAgent(run, tempSlugDir("alpha"));
     const second = await addAgent(run, tempSlugDir("alpha"));
+    // Shared = the RESULT (tools + crib-sheet): exactly one tools/list per endpoint.
     expect(mcpRequests(run.calls, ALPHA, "tools/list")).toHaveLength(1);
-    expect(mcpRequests(run.calls, ALPHA, "initialize")).toHaveLength(1);
+    // The handshake stays per-session: the cache-miss discovery opens one session of
+    // its own, and each of the two agents also initializes its own client — so
+    // initialize runs 3 times while tools/list runs once.
+    expect(mcpRequests(run.calls, ALPHA, "initialize")).toHaveLength(3);
     expect(toolNames(first.injected)).toEqual(["memory_remember", "memory_search"]);
     expect(toolNames(second.injected)).toEqual(["memory_remember", "memory_search"]);
     expect(sectionText(second.injected)).toContain("ALPHA crib");
@@ -298,6 +336,30 @@ describe("discovery happens on the session's own project endpoint", () => {
     expect(toolCalls).toHaveLength(1);
     expect(toolCalls[0].url).toBe(ALPHA);
     expect(toolCalls[0].name).toBe("memory.search"); // underscored request resolved to the discovered dotted name
+    // mcp-client is session-stateful: the call must echo the mcp-session-id issued to
+    // THIS session by its own initialize — not the shared discovery client's session.
+    const inits = mcpRequests(run.calls, ALPHA, "initialize");
+    expect(inits.length).toBeGreaterThanOrEqual(2); // shared discovery init + this session's own init
+    expect(inits[0].issuedSid).toBeTruthy();
+    const ownSid = inits[inits.length - 1].issuedSid;
+    expect(ownSid).not.toBe(inits[0].issuedSid);
+    expect(toolCalls[0].headers["mcp-session-id"]).toBe(ownSid);
+  });
+
+  it("in a git-bound repo the per-session initialize carries the fingerprint header, the shared discovery does not", async () => {
+    const run = startPlugin(routes(), {
+      resolvePayload: { ok: true, outcome: "bound", slug: "alpha" },
+    });
+    const dir = gitRepoDir();
+    const fingerprint = git(dir, "rev-parse", "HEAD");
+    const { injected } = await addAgent(run, dir);
+    expect(toolNames(injected)).toEqual(["memory_remember", "memory_search"]);
+    const inits = mcpRequests(run.calls, ALPHA, "initialize");
+    expect(inits).toHaveLength(2); // shared discovery session + this session's own
+    // Discovery is endpoint-wide and never carries one session's fingerprint.
+    expect(inits[0].headers["x-rembric-repo-fingerprint"]).toBeUndefined();
+    // The session's own client does.
+    expect(inits[1].headers["x-rembric-repo-fingerprint"]).toBe(fingerprint);
   });
 
   it("a failed discovery does not cool down — the next session retries its endpoint", async () => {
