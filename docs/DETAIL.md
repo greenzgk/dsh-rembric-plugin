@@ -185,13 +185,13 @@ GUI use `/rembric-login`. `/rembric-status` reports the token source
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `.rembric` file with `PROJECT_SLUG=…` in the session's directory | that project; always wins over `REMBRIC_PROJECT_SLUG` (inside git the file is walked up to the repo root)     |
 | `REMBRIC_PROJECT_SLUG` set and valid, no `.rembric`              | that project (a mismatch with the repo binding is reported as a conflict but the explicit slug is used)       |
-| `REMBRIC_PROJECT_SLUG` set but invalid                           | **off** (`no_project`) — a typo never falls through to another project                                        |
+| Outside git, `REMBRIC_PROJECT_SLUG` set but invalid              | **off** (`no_project`) — a typo never falls through to another project                                        |
 | Outside git, no `.rembric` and no valid `REMBRIC_PROJECT_SLUG`   | **off** (`no_project`): no tools registered, no server requests, and a notice in the first reply explains why |
 | `.rembric` containing `PROJECT_SLUG=default`                     | `default` — the supported escape hatch for using it deliberately                                              |
 | Inside a git repo, repo bound to a project                       | the bound project                                                                                             |
-| Inside a git repo, repo not bound                                | **off** (`unbound`): one warning line, the Rembric tools are not registered                                   |
+| Inside a git repo, repo not bound                                | `unbound`: one warning line, the Rembric tools are not registered                                             |
 | Git probe fails and an ancestor directory contains `.git`        | reported as inside a repository with cause `git_unavailable` — not "not a git repository"                     |
-| Credentials or server reject the token                           | **off** (`refused`): memory off for a credential/server reason, not "no project"                              |
+| Credentials or server reject the token                           | `refused`: memory off for a credential/server reason, not "no project"                                        |
 
 An off session is inert, not merely quiet. Its mode, reason, and message stay
 available to slash commands, `/rembric-status` shows the off mode and its reason,
