@@ -297,6 +297,25 @@ function warnOnce(ctx, message) {
   }
 }
 
+// Off-session system-prompt notice (spec #26): project resolution already
+// produced a human-readable reason naming both enable paths; the notice appends
+// the standing rule that ends every off notice — the model must surface the
+// state to the user but never pick the project itself. The fallback keeps both
+// enable paths in the text even if the resolver ever omits its message.
+const OFF_NOTICE_GUARD =
+  "Tell the user about this in your first reply. Do not create or edit a `.rembric` file yourself: " +
+  "where a workspace's memories live is the user's decision. Only do it when the user explicitly asks, " +
+  "and ask them for the project slug first.";
+
+function offNoticeText(resolved) {
+  const reason =
+    resolved.message ??
+    "Rembric memory is off for this session: no project was chosen — add a `.rembric` file " +
+      "containing PROJECT_SLUG=<slug> in this session's starting directory, or set " +
+      "REMBRIC_PROJECT_SLUG=<slug> in the environment.";
+  return `${reason}\n\n${OFF_NOTICE_GUARD}`;
+}
+
 function buildToolDef(tool, client, stateRef) {
   const attaches = declaresSessionId(tool.inputSchema);
   const underscored = tool.name.replace(/\./g, "_");
@@ -330,6 +349,83 @@ async function setupAgent(ctx, config, agent) {
 
   const { url: serverUrl } = resolveServerUrl(config);
   const { value: token } = await resolveToken(ctx);
+
+  let cwd;
+  try {
+    cwd = ctx.workingDirectory.get(agent.session) ?? process.cwd();
+  } catch {
+    cwd = process.cwd();
+  }
+
+  // Resolve the project BEFORE touching the server (spec #26): an off session
+  // must make no request at all, so discovery and the token gate both move
+  // behind this check. Outside git resolution needs no token — the mode is
+  // known from the directory alone; inside git the resolver uses the token
+  // when present and reports `refused`/no_credentials when not.
+  let resolved;
+  try {
+    resolved = await resolveProject({
+      startDir: cwd,
+      env: process.env,
+      serverUrl,
+      apiToken: token,
+    });
+  } catch (error) {
+    warnOnce(
+      ctx,
+      `project resolution failed for ${cwd}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return;
+  }
+
+  const sid = agent.session.id;
+
+  // Off / non-project sessions (no_project / unbound / refused): memory is off
+  // for the whole session lifetime. Register a state so slash commands can
+  // report the mode and its reason, but with no client/core and zero tools;
+  // then stop — no discovery, no connection, no request.
+  if (resolved.mode !== "project") {
+    const state = {
+      fiber: null,
+      client: null,
+      slug: null,
+      slugSource: null,
+      mode: resolved.mode,
+      reason: resolved.reason ?? null,
+      message: resolved.message ?? null,
+      toolCount: 0,
+      core: null,
+      sid,
+      cwd,
+      agent,
+    };
+    // The diagnostic line still goes to the plugin log.
+    warnOnce(ctx, resolved.message ?? `off — no project (${resolved.mode})`);
+    // Only a no_project session gets the system-prompt off notice: unbound and
+    // refused are repository-binding states with their own remedy wording, not
+    // the "choose a project" prompt.
+    if (resolved.mode === "no_project") {
+      try {
+        state.fiber = agent.ctx.inject(["systemPrompt"], (scope) => {
+          scope.systemPrompt.section({
+            name: "context:rembric",
+            order: 1000,
+            text: offNoticeText(resolved),
+            interpolate: false,
+          });
+        });
+      } catch (error) {
+        warnOnce(
+          ctx,
+          `off notice unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    agentStates.set(agent, state);
+    sessionIndex.set(sid, state);
+    return;
+  }
+
   if (!token) {
     warnOnce(
       ctx,
@@ -349,41 +445,6 @@ async function setupAgent(ctx, config, agent) {
     return;
   }
 
-  let cwd;
-  try {
-    cwd = ctx.workingDirectory.get(agent.session) ?? process.cwd();
-  } catch {
-    cwd = process.cwd();
-  }
-
-  let resolved;
-  try {
-    resolved = await resolveProject({
-      startDir: cwd,
-      env: process.env,
-      serverUrl,
-      apiToken: token,
-    });
-  } catch (error) {
-    warnOnce(
-      ctx,
-      `project resolution failed for ${cwd}: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return;
-  }
-
-  if (resolved.mode === "refused") {
-    warnOnce(ctx, resolved.message ?? "off — repository could not be resolved to a project");
-    return;
-  }
-  if (resolved.mode === "unbound") {
-    warnOnce(
-      ctx,
-      resolved.message ?? "repository is not bound to a project; memory off for this session",
-    );
-    return;
-  }
-
   const slug = resolved.slug ?? null;
   const client = createMcpClient(buildEndpoint(serverUrl, slug), token, resolved.header ?? null);
   try {
@@ -399,7 +460,6 @@ async function setupAgent(ctx, config, agent) {
   // The state object is created before registration so the tool definitions can
   // hold a late-bound reference to it: `core` is filled in after registration and
   // read at execute time by the auto-sessionId seam (withHostSessionId).
-  const sid = agent.session.id;
   // `cwd` and `agent` are needed by the command wiring: file recall resolves
   // candidate paths against the session's working directory and injects hints
   // through the agent. Neither is ever serialized (only the client-name string
