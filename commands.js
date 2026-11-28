@@ -310,9 +310,16 @@ async function handleLogin(deps, invocation) {
   if (!check.ok) {
     return err(`token saved, but the connection check failed: ${check.message}`);
   }
+  // Spec #26 T5: the check answers "is the token valid". A null tool count
+  // means the server refused the default project for this token but accepted
+  // the token itself — report the verdict, never a bogus tool count.
+  const verdict =
+    check.toolCount == null
+      ? "token is valid; no access to the default project"
+      : `${check.toolCount} tools available`;
   return {
     kind: "success",
-    text: `rembric: token saved — the server accepted it (${check.toolCount} tools available). Never shown again; manage it with /rembric-status.`,
+    text: `rembric: token saved — the server accepted it (${verdict}). Never shown again; manage it with /rembric-status.`,
   };
 }
 
