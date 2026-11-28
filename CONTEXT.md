@@ -49,6 +49,21 @@ agents, and wires prompts, nudges, and the capture lifecycle to the session
 core.
 _Avoid_: Adapter, bridge
 
+**Agent link**:
+The plugin's connection side: for one agent it resolves the project, resolves
+the token, discovers the tool set, opens the client, and owns the session
+core. `link(agent)` answers with one of three outcomes — connected, off, or
+refused — and the same link serves `forAgent`, `forSession`, `call`, and
+`unlink`.
+_Avoid_: Connection module, connection contract (a Connection check is the
+auth probe, not the link)
+
+**Relink**:
+Drops one agent's link and builds it again, after a successful connection
+check, so a session that failed to connect can be repaired without recreating
+it. Composed of `unlink` and `link`, never a third path.
+_Avoid_: Reconnect, retry, restart
+
 **Session core**:
 The plugin's capture side: owns each session's lifecycle from session
 registration through turn close and summary flush.
