@@ -144,11 +144,11 @@ function withTimeoutSignal(signal, timeoutMs) {
 // ---- MCP call + formatting ---------------------------------------------------
 
 // `preferredName` is the underscored name DSH registers the tool under; the MCP
-// server owns the real (usually dotted) name, so it is resolved through the
-// host's discovery cache before the call goes out.
+// server owns the real (usually dotted) name, so it is resolved against this
+// session's own discovered tools before the call goes out.
 async function callRembric(deps, state, preferredName, args, signal) {
   if (!state || !state.client) throw new Error(NOT_CONNECTED);
-  const name = deps.resolveToolName(preferredName);
+  const name = deps.resolveToolName(preferredName, state);
   const timed = withTimeoutSignal(signal, COMMAND_TIMEOUT_MS);
   try {
     const { text, isError } = await state.client.callTool(name, args ?? {}, timed.signal);
