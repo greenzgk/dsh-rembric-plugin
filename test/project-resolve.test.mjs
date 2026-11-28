@@ -1,4 +1,4 @@
-// test/project-resolve.test.mjs — project resolution contract (ticket #28, spec #26).
+// test/project-resolve.test.mjs — project resolution contract (tickets #28/#29, spec #26).
 //
 // Outside a git repository the project comes ONLY from an explicit choice in the
 // session's starting directory: a `.rembric` file (wins) or REMBRIC_PROJECT_SLUG.
@@ -8,7 +8,7 @@
 // server is stubbed via fetchImpl (and must see zero requests outside git).
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -38,6 +38,27 @@ function gitRepo({ commit = true } = {}) {
   git(dir, "init", "-q");
   if (commit) git(dir, "commit", "-q", "--allow-empty", "-m", "one");
   return dir;
+}
+
+// A directory holding a fake `git` that always fails, to make the probe fail
+// while a real repository sits on disk (ticket #29). Classification must come
+// from the .git ancestor, never from what the probe prints.
+function fakeGit(scriptBody) {
+  const bin = tempDir("fakegit");
+  writeFileSync(join(bin, "git"), `#!/bin/sh\n${scriptBody}\n`);
+  chmodSync(join(bin, "git"), 0o755);
+  return bin;
+}
+
+// Run with PATH replaced — runGit resolves `git` through process.env (minus GIT_*).
+async function withPath(bin, run) {
+  const saved = process.env.PATH;
+  process.env.PATH = bin;
+  try {
+    return await run();
+  } finally {
+    process.env.PATH = saved;
+  }
 }
 
 // fetchImpl stub for POST /api/repositories/resolve; records every call.
@@ -329,5 +350,132 @@ describe("inside git: outcomes unchanged by #28", () => {
     expect(result.mode).toBe("unbound");
     expect(result.reason).toBe("no_fingerprint");
     expect(result.message).toContain("shallow clone");
+  });
+});
+
+describe("failed git probe: classified by repository boundary (ticket #29, spec #26)", () => {
+  const fails = 'echo "fatal: detected dubious ownership in repository" >&2; exit 128';
+
+  it("probe fails with a .git ancestor → inside a repository, cause git_unavailable, its own remedy", async () => {
+    const repo = gitRepo(); // real repository with a commit
+    const bin = fakeGit(fails);
+    const { calls, fetchImpl } = stubResolve({
+      ok: true,
+      outcome: "unbound",
+      reason: "no_fingerprint",
+    });
+    const result = await withPath(bin, () =>
+      resolveProject({
+        startDir: repo,
+        env: {},
+        serverUrl: SERVER_URL,
+        apiToken: "tok",
+        fetchImpl,
+      }),
+    );
+    expect(result.mode).toBe("unbound");
+    expect(result.reason).toBe("no_fingerprint");
+    expect(result.repository.insideGit).toBe(true);
+    expect(result.repository.cause).toBe("git_unavailable");
+    expect(result.header).toBe("unavailable");
+    expect(result.message).toContain("git could not read its history");
+    expect(result.message).toContain("make git available");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].body.fingerprint).toBeNull();
+  });
+
+  it(".git marker git cannot resolve (real git fails on its own) → inside a repository, cause git_unavailable", async () => {
+    const dir = tempDir("broken-marker");
+    writeFileSync(join(dir, ".git"), "gitdir: /nonexistent-rembric-test.git\n");
+    const { calls, fetchImpl } = stubResolve({
+      ok: true,
+      outcome: "unbound",
+      reason: "no_fingerprint",
+    });
+    const result = await resolveProject({
+      startDir: dir,
+      env: {},
+      serverUrl: SERVER_URL,
+      apiToken: "tok",
+      fetchImpl,
+    });
+    expect(result.mode).toBe("unbound");
+    expect(result.reason).toBe("no_fingerprint");
+    expect(result.repository.insideGit).toBe(true);
+    expect(result.repository.cause).toBe("git_unavailable");
+    expect(result.message).toContain("git could not read its history; make git available");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("probe failure whose error text claims 'not a git repository' still counts as inside (never inspects error text)", async () => {
+    const repo = gitRepo();
+    const bin = fakeGit(
+      'echo "fatal: not a git repository (or any of the parent directories): .git" >&2; exit 128',
+    );
+    const { fetchImpl } = stubResolve({ ok: true, outcome: "unbound", reason: "no_fingerprint" });
+    const result = await withPath(bin, () =>
+      resolveProject({
+        startDir: repo,
+        env: {},
+        serverUrl: SERVER_URL,
+        apiToken: "tok",
+        fetchImpl,
+      }),
+    );
+    expect(result.mode).toBe("unbound");
+    expect(result.repository.cause).toBe("git_unavailable");
+    expect(result.message).toContain("make git available");
+  });
+
+  it("probe fails without a .git ancestor → genuinely outside git, off with no_choice", async () => {
+    const dir = tempDir("plain");
+    const bin = fakeGit(fails);
+    const { calls, fetchImpl } = forbiddenFetch();
+    const result = await withPath(bin, () =>
+      resolveProject({ startDir: dir, env: {}, serverUrl: SERVER_URL, apiToken: "tok", fetchImpl }),
+    );
+    expect(result.mode).toBe("no_project");
+    expect(result.reason).toBe("no_choice");
+    expect(result.repository).toBeNull();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("git binary entirely missing with a .git ancestor → same git_unavailable outcome (existing case)", async () => {
+    const repo = gitRepo();
+    const bin = tempDir("emptybin"); // PATH without any git at all → spawn fails with ENOENT
+    const { fetchImpl } = stubResolve({ ok: true, outcome: "unbound", reason: "no_fingerprint" });
+    const result = await withPath(bin, () =>
+      resolveProject({
+        startDir: repo,
+        env: {},
+        serverUrl: SERVER_URL,
+        apiToken: "tok",
+        fetchImpl,
+      }),
+    );
+    expect(result.mode).toBe("unbound");
+    expect(result.repository.cause).toBe("git_unavailable");
+    expect(result.message).toContain("make git available");
+  });
+
+  it("probe fails with a .git ancestor and REMBRIC_PROJECT_SLUG set → explicit project, no request", async () => {
+    const repo = gitRepo();
+    const bin = fakeGit(fails);
+    const { calls, fetchImpl } = forbiddenFetch();
+    const result = await withPath(bin, () =>
+      resolveProject({
+        startDir: repo,
+        env: { REMBRIC_PROJECT_SLUG: "alpha" },
+        serverUrl: SERVER_URL,
+        apiToken: "tok",
+        fetchImpl,
+      }),
+    );
+    expect(result.mode).toBe("project");
+    expect(result.slug).toBe("alpha");
+    expect(result.source).toBe("env");
+    expect(result.repository.cause).toBe("git_unavailable");
+    expect(result.header).toBe("unavailable");
+    expect(calls).toHaveLength(0);
   });
 });

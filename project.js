@@ -56,11 +56,7 @@ function gitEnv() {
 function runGit(cwd, args) {
   return new Promise((done) => {
     execFile("git", args, { cwd, timeout: GIT_TIMEOUT_MS, env: gitEnv() }, (error, stdout) =>
-      done(
-        error
-          ? { ok: false, missing: error.code === "ENOENT", out: "" }
-          : { ok: true, out: String(stdout).trim() },
-      ),
+      done(error ? { ok: false, out: "" } : { ok: true, out: String(stdout).trim() }),
     );
   });
 }
@@ -111,13 +107,19 @@ export function normalizeRemote(raw) {
 
 export async function inspectRepository(startDir) {
   const inside = await runGit(startDir, ["rev-parse", "--is-inside-work-tree"]);
-  if (!inside.ok && inside.missing) {
+  // A failed probe — for ANY reason — is classified by repository-boundary
+  // evidence on disk, never by error text (spec #26 T3): a `.git` ancestor
+  // means the session sits inside a repository whose git is unavailable
+  // (its own cause, reason and remedy downstream); without one the directory
+  // is genuinely outside git. This extends the missing-git-binary case that
+  // already consulted dotGitAncestor to every probe failure.
+  if (!inside.ok) {
     const root = dotGitAncestor(startDir);
     return root
       ? { insideGit: true, root, fingerprint: null, cause: "git_unavailable", remotes: [] }
       : { insideGit: false };
   }
-  if (!inside.ok || inside.out !== "true") return { insideGit: false };
+  if (inside.out !== "true") return { insideGit: false };
 
   const toplevel = await runGit(startDir, ["rev-parse", "--show-toplevel"]);
   const root = toplevel.ok && toplevel.out ? realDirectory(toplevel.out) : realDirectory(startDir);
