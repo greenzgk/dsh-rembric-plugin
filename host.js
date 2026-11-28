@@ -1,7 +1,8 @@
 // Rembric memory plugin for DeepSeek Harness.
 //
-// Mirrors the upstream Rembric Pi plugin: discovers the Rembric MCP tool set once,
-// registers every tool under an underscored name on each agent, and forwards the
+// Mirrors the upstream Rembric Pi plugin: discovers the Rembric MCP tool set on the
+// session's own project endpoint (cached per endpoint, never the bare /mcp), registers
+// every tool under an underscored name on each agent, and forwards the
 // server's usage crib-sheet into the system prompt. Project selection follows the
 // working directory (.rembric file / env / git binding), exactly like the Pi client.
 //
@@ -43,7 +44,6 @@ const CREDENTIAL_REF = "REMBRIC_API_TOKEN";
 // "store" instead of silently degrading to "env".
 const AMBIENT_CREDENTIAL_SOURCES = new Set(["env", "project-env", "user-env"]);
 const DISCOVERY_TIMEOUT_MS = 10_000;
-const FAILURE_COOLDOWN_MS = 30_000;
 const DEFAULT_SERVER_URL = "http://127.0.0.1:8790";
 
 // Recursively rewrite every "description" string in a JSON Schema so the model
@@ -235,32 +235,35 @@ export async function checkConnection({
   }
 }
 
-// ---- global discovery cache -------------------------------------------------
+// ---- per-endpoint discovery cache --------------------------------------------
+// Discovery belongs to the session's resolved project (spec #26 T4): tools and
+// crib-sheet are fetched from the session's own project endpoint, never from the
+// bare /mcp endpoint (the implicit `default`). Entries are keyed by endpoint and
+// shared by sessions resolving to the same project; concurrent sessions on one
+// endpoint share the in-flight promise. A failed discovery is NOT cached — the
+// next session retries immediately (the old global failure cooldown is gone).
 
-let discovery = null; // { tools, instructions }
-let discoveryPromise = null;
-let failedAt = 0;
+const discoveryCache = new Map(); // endpoint -> Promise<{ tools, instructions }>
 
-async function ensureDiscovery(serverUrl, token) {
-  if (discovery) return discovery;
-  if (Date.now() - failedAt < FAILURE_COOLDOWN_MS) {
-    throw new Error("Rembric discovery is cooling down after a recent failure");
-  }
-  if (!discoveryPromise) {
-    discoveryPromise = (async () => {
-      const client = createMcpClient(buildEndpoint(serverUrl, null), token, null);
+function ensureDiscovery(serverUrl, token, slug) {
+  const endpoint = buildEndpoint(serverUrl, slug);
+  let pending = discoveryCache.get(endpoint);
+  if (!pending) {
+    pending = (async () => {
+      // Session-agnostic request: no fingerprint header — a shared discovery must
+      // not carry one session's repository identity.
+      const client = createMcpClient(endpoint, token, null);
       const signal = AbortSignal.timeout(DISCOVERY_TIMEOUT_MS);
       await client.initialize(signal);
       const tools = await client.listTools(signal);
-      discovery = { tools, instructions: client.instructions() };
-      return discovery;
-    })().catch((error) => {
-      failedAt = Date.now();
-      discoveryPromise = null;
-      throw error;
+      return { tools, instructions: client.instructions() };
+    })();
+    discoveryCache.set(endpoint, pending);
+    pending.catch(() => {
+      if (discoveryCache.get(endpoint) === pending) discoveryCache.delete(endpoint);
     });
   }
-  return discoveryPromise;
+  return pending;
 }
 
 // Resolve a tool name for a direct client.callTool(). Commands are written with
@@ -268,9 +271,11 @@ async function ensureDiscovery(serverUrl, token) {
 // but the MCP server only knows the name it advertised at discovery — dotted for
 // Rembric (`memory.search`). Try the given name, then its dotted form, then its
 // underscored form, so the call works whichever convention the server uses.
-function resolveToolName(preferred) {
+// The candidate set is the CALLING session's own discovered tools (spec #26 T4):
+// one project's tool set must never rename another project's calls.
+function resolveToolName(preferred, state) {
   const name = String(preferred ?? "");
-  const tools = discovery?.tools ?? [];
+  const tools = state?.tools ?? [];
   if (tools.length === 0) return name;
   const names = new Set(tools.map((tool) => tool?.name).filter(Boolean));
   if (names.has(name)) return name;
@@ -434,9 +439,14 @@ async function setupAgent(ctx, config, agent) {
     return;
   }
 
+  const slug = resolved.slug ?? null;
+
+  // Discover on the session's own project endpoint (spec #26 T4) — never the bare
+  // /mcp. A cached result means this project was already discovered; a failed
+  // discovery is retried by the next session (no cooldown).
   let disc;
   try {
-    disc = await ensureDiscovery(serverUrl, token);
+    disc = await ensureDiscovery(serverUrl, token, slug);
   } catch (error) {
     warnOnce(
       ctx,
@@ -445,7 +455,11 @@ async function setupAgent(ctx, config, agent) {
     return;
   }
 
-  const slug = resolved.slug ?? null;
+  // Per-agent client for the actual tool calls: this session's own connection,
+  // carrying its fingerprint header. mcp-client is session-stateful — it only
+  // echoes mcp-session-id after its own initialize — so every session handshakes
+  // on its own client. What sharing covers is the discovery RESULT (one tools/list
+  // per endpoint), not this handshake.
   const client = createMcpClient(buildEndpoint(serverUrl, slug), token, resolved.header ?? null);
   try {
     await client.initialize(AbortSignal.timeout(DISCOVERY_TIMEOUT_MS));
@@ -470,6 +484,9 @@ async function setupAgent(ctx, config, agent) {
     slug,
     slugSource: resolved.source ?? null,
     mode: resolved.mode,
+    // This session's discovered tool set — resolveToolName reads it per call so
+    // one project's names never resolve against another project's tools.
+    tools: disc.tools,
     toolCount: disc.tools.length,
     core: null,
     sid,
