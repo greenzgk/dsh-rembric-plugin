@@ -690,10 +690,13 @@ describe("[H] apply() wires credential commands end-to-end", () => {
     }
   });
 
-  it("config.projectSlug no longer pins the project (injection removed)", async () => {
+  it("config.projectSlug no longer pins the project (fail closed outside git)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "rembric-t15-"));
+    const savedSlug = process.env.REMBRIC_PROJECT_SLUG;
+    delete process.env.REMBRIC_PROJECT_SLUG;
+    const seen = [];
     const realFetch = globalThis.fetch;
-    globalThis.fetch = healthyFetch([]);
+    globalThis.fetch = healthyFetch(seen);
     try {
       const { ctx, registered } = makeApplyCtx({
         resolveImpl: async () => ({ value: "tok", source: "store" }),
@@ -702,12 +705,15 @@ describe("[H] apply() wires credential commands end-to-end", () => {
       apply(ctx, { serverUrl: "http://slug-test:1", projectSlug: "cfg-slug" });
       const agent = makeFakeAgent("s-slug");
       ctx.emit("agent/created", { agent });
-      const text = await statusText(registered, agent, "Mode: on");
-      expect(text).toContain("Mode: on (default)");
-      expect(text).toContain("Project: not resolved for this session");
-      expect(text).toContain("Tools: 2");
+      const text = await statusText(registered, agent, "no_project");
+      expect(text).toContain("Mode: off (no_project)");
+      expect(text).toContain("Reason: no_choice");
+      expect(text).toContain("Tools: 0");
+      // An off session is inert: not even a discovery request leaves the plugin.
+      expect(seen).toHaveLength(0);
     } finally {
       globalThis.fetch = realFetch;
+      if (savedSlug !== undefined) process.env.REMBRIC_PROJECT_SLUG = savedSlug;
     }
   });
 });
