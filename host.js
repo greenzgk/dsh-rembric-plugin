@@ -380,10 +380,10 @@ async function setupAgent(ctx, config, agent) {
 
   const sid = agent.session.id;
 
-  // Off sessions (no_project / unbound / refused): memory is off for the whole
-  // session lifetime. Register a state so slash commands can report the mode
-  // and its reason, but with no client/core and zero tools; then stop — no
-  // discovery, no connection, no request.
+  // Off / non-project sessions (no_project / unbound / refused): memory is off
+  // for the whole session lifetime. Register a state so slash commands can
+  // report the mode and its reason, but with no client/core and zero tools;
+  // then stop — no discovery, no connection, no request.
   if (resolved.mode !== "project") {
     const state = {
       fiber: null,
