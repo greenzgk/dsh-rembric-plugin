@@ -84,9 +84,11 @@ stale shell export.
 _Avoid_: Origin, provider
 
 **Connection check**:
-The single probe that asks the Rembric server to accept the token and list its
-tools; the settings card and `/rembric-login` share it. `/rembric-status` does
-not probe — it reports the cached session state captured at setup.
+The single authentication probe that asks the Rembric server to accept the token
+and list its tools; the settings card and `/rembric-login` share it. An
+authentication rejection means invalid; a project-access rejection means a valid
+token without `default` access. `/rembric-status` does not probe — it reports the
+cached session state captured at setup.
 _Avoid_: Handshake, ping
 
 **Settings card**:
@@ -97,7 +99,26 @@ that can open that page.
 _Avoid_: Config form, preferences
 
 **Project slug**:
-The Rembric project a session belongs to, resolved per session from the working
-directory (`.rembric`, then `REMBRIC_PROJECT_SLUG`, then the server's repository
-binding). Never pinned by plugin config.
+The Rembric project a session belongs to, resolved per session from its starting
+directory: inside git `.rembric`, then `REMBRIC_PROJECT_SLUG`, then the server's
+repository binding; outside git only that directory's `.rembric` file or
+`REMBRIC_PROJECT_SLUG` (the file wins, no parent walk). Never pinned by plugin
+config, and never `default` unless a `.rembric` file names it.
 _Avoid_: Project id, namespace
+
+**Off session**:
+A session that resolves to mode `no_project`: memory stays off, no tools are
+registered and no server request is made. Carries a reason and a human-readable
+message, surfaced in `/rembric-status` and in a system-prompt notice.
+_Avoid_: Disabled session, disconnected session
+
+**Unbound**:
+The resolution outcome for a session inside a git repository whose repository has
+no project binding — memory off via the existing binding remedy; distinct from an
+off session (nothing named a project) and from `refused`.
+_Avoid_: No project, off session
+
+**Refused**:
+The resolution outcome when the credentials or the server reject the session —
+memory off with a server-side reason; never treated as "no project".
+_Avoid_: Rejected session, auth failure

@@ -18,11 +18,17 @@ project-resolution rules, adapted to how DSH bundles and services work.
 - **Forwards the server's usage crib-sheet** (the instructions Rembric returns at
   MCP `initialize`) into the system prompt, so the agent knows when to recall,
   what to save, and how to summarize — without you writing any of that.
-- **Picks the project per session** from the working directory, exactly like the Pi
-  client: a `.rembric` file (walked up to the repo root) wins, then the
-  `REMBRIC_PROJECT_SLUG` env var, then — inside a git repo — the admin-bound
-  repository binding. It never silently falls back to the `default` project
-  inside a git repo. The plugin config never pins a project.
+- **Picks the project per session** and fails closed when nothing names one.
+  Inside a git repo the existing binding flow applies: a `.rembric` file (walked
+  up to the repo root) wins, then the `REMBRIC_PROJECT_SLUG` env var, then the
+  admin-bound repository binding. Outside git only an explicit choice counts — a
+  `.rembric` file in the session's directory or `REMBRIC_PROJECT_SLUG`, with
+  `.rembric` winning and no parent walk; an invalid env var counts as no choice.
+  Without one, memory is off (mode `no_project`): no tools registered, no server
+  requests, and a notice in your first reply explains why. The plugin never falls
+  back to the `default` project anywhere; a `.rembric` file naming
+  `PROJECT_SLUG=default` is the supported way to opt into `default` deliberately.
+  The plugin config never pins a project.
 - **Captures every session** to the server: prompts, assistant messages, turn
   reports, and summaries (see below). The plugin holds no business logic of its
   own; the server is the source of truth.
@@ -163,6 +169,10 @@ The API token is **not** stored in config. It is a credential reference —
 2. An exported `REMBRIC_API_TOKEN` environment variable is an ambient fallback
    only. The stored credential wins when both exist. An empty stored value is
    treated as absent.
+3. The verification is an authentication check only: an authentication rejection
+   means the token is invalid; a project-access rejection means it is accepted
+   with no `default` access. It is the settings card's and `/rembric-login`'s
+   only probe.
 
 The plugin never writes the token to the environment. The DSH GUI launched from
 the desktop does **not** inherit your shell's `REMBRIC_API_TOKEN`, so in the
@@ -171,14 +181,24 @@ GUI use `/rembric-login`. `/rembric-status` reports the token source
 
 ## Project resolution rules
 
-| Situation                                                                      | Result                                                                                                                         |
-| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| `.rembric` file with `PROJECT_SLUG=…` in the tree (walked up to the repo root) | that project                                                                                                                   |
-| `REMBRIC_PROJECT_SLUG` set                                                     | that project (an explicit slug wins; a mismatch with the repo binding is reported as a conflict but the explicit slug is used) |
-| Inside a git repo, repo bound to a project                                     | the bound project                                                                                                              |
-| Inside a git repo, repo not bound                                              | **off** for the session: one warning line, the Rembric tools are not registered                                                |
-| Not in git, no slug                                                            | the `default` project                                                                                                          |
-| No token at all                                                                | plugin stays off, one warning line; set the token with `/rembric-login <token>`                                                |
+| Situation                                                        | Result                                                                                                        |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `.rembric` file with `PROJECT_SLUG=…` in the session's directory | that project; always wins over `REMBRIC_PROJECT_SLUG` (inside git the file is walked up to the repo root)     |
+| `REMBRIC_PROJECT_SLUG` set and valid, no `.rembric`              | that project (a mismatch with the repo binding is reported as a conflict but the explicit slug is used)       |
+| `REMBRIC_PROJECT_SLUG` set but invalid                           | **off** (`no_project`) — a typo never falls through to another project                                        |
+| Outside git, no `.rembric` and no valid `REMBRIC_PROJECT_SLUG`   | **off** (`no_project`): no tools registered, no server requests, and a notice in the first reply explains why |
+| `.rembric` containing `PROJECT_SLUG=default`                     | `default` — the supported escape hatch for using it deliberately                                              |
+| Inside a git repo, repo bound to a project                       | the bound project                                                                                             |
+| Inside a git repo, repo not bound                                | **off** (`unbound`): one warning line, the Rembric tools are not registered                                   |
+| Git probe fails and an ancestor directory contains `.git`        | reported as inside a repository with cause `git_unavailable` — not "not a git repository"                     |
+| Credentials or server reject the token                           | **off** (`refused`): memory off for a credential/server reason, not "no project"                              |
+
+An off session is inert, not merely quiet. Its mode, reason, and message stay
+available to slash commands, `/rembric-status` shows the off mode and its reason,
+and a system-prompt notice tells the assistant to mention the off state in its
+first reply, name the two ways to enable memory (a `.rembric` file or
+`REMBRIC_PROJECT_SLUG`), and never create or edit a `.rembric` file on its own —
+only when you explicitly ask, asking you for the project slug first.
 
 ## Status
 
