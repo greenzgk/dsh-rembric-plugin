@@ -211,23 +211,23 @@ describe("[D] checkConnection with fake transport", () => {
     });
   });
 
-  it("403 → no-project-access", async () => {
+  it("403 → accepted: the token authenticated, only project access was refused (spec #26 T5)", async () => {
     const { fetchImpl } = makeFetch({
-      initialize: () => okJson({ protocolVersion: "2025-06-18" }),
+      initialize: () => httpError(403),
+      "notifications/initialized": () => okJson({}),
+    });
+    const result = await checkConnection({ serverUrl: "http://s:1", token: "t", fetchImpl });
+    expect(result).toEqual({ ok: true, toolCount: null, serverName: null });
+  });
+
+  it("403 on tools/list after a successful handshake → accepted with the handshake server name", async () => {
+    const { fetchImpl } = makeFetch({
+      initialize: () => okJson({ protocolVersion: "2025-06-18", serverInfo: { name: "Rembric" } }),
       "notifications/initialized": () => okJson({}),
       "tools/list": () => httpError(403),
     });
-    const result = await checkConnection({
-      serverUrl: "http://s:1",
-      token: "t",
-      slug: "p",
-      fetchImpl,
-    });
-    expect(result).toEqual({
-      ok: false,
-      kind: "no-project-access",
-      message: "the token has no access to this project (HTTP 403)",
-    });
+    const result = await checkConnection({ serverUrl: "http://s:1", token: "t", fetchImpl });
+    expect(result).toEqual({ ok: true, toolCount: null, serverName: "Rembric" });
   });
 
   it("404 → no-mcp", async () => {
@@ -438,6 +438,23 @@ describe("[F] /rembric-login", () => {
     expect(res.kind).toBe("error");
     expect(res.text).toContain("the server rejected the token (HTTP 401)");
     expect(calls.save).toEqual(["tok-42"]);
+  });
+
+  it("accepted with a tool count → success reports the discovered tool count", async () => {
+    const { login } = setup({ check: { ok: true, toolCount: 3, serverName: "Rembric" } });
+    const res = await login.handler({ rawInput: "tok-42" });
+    expect(res.kind).toBe("success");
+    expect(res.text).toContain("(3 tools available)");
+  });
+
+  it("accepted without default access (spec #26 T5) → success, token valid, no bogus tool count", async () => {
+    const { calls, login } = setup({ check: { ok: true, toolCount: null, serverName: null } });
+    const res = await login.handler({ rawInput: "tok-42" });
+    expect(res.kind).toBe("success");
+    expect(calls.save).toEqual(["tok-42"]);
+    expect(res.text).toContain("the server accepted it");
+    expect(res.text).toContain("token is valid; no access to the default project");
+    expect(res.text).not.toMatch(/null/);
   });
 
   it("save failure → generic error with no raw-error echo, logged instead, no check attempted", async () => {

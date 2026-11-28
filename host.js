@@ -207,10 +207,12 @@ export function classifyConnectionFailure(error) {
   return { kind: "unreachable", message: "the host could not be reached" };
 }
 
-// The single shared connection check (CONTEXT.md "Connection check"): ask the
-// Rembric server to accept the token and list its tools. /rembric-login and
+// The single shared connection check (CONTEXT.md "Connection check"): an
+// authentication probe — does the server accept this token. /rembric-login and
 // the settings card probe through here so every probing surface reports the
-// same failure wording. /rembric-status deliberately does NOT probe — it
+// same verdicts: authentication rejection → invalid, project-access rejection
+// → accepted without tool count, success → accepted with the discovered tool
+// count and server name. /rembric-status deliberately does NOT probe — it
 // reports cached session state (toolCount captured at setup). fetchImpl is
 // injectable so tests run without a network.
 export async function checkConnection({
@@ -226,12 +228,21 @@ export async function checkConnection({
   }
   const client = createMcpClient(buildEndpoint(serverUrl, slug), trimmed, null, fetchImpl);
   const signal = AbortSignal.timeout(timeoutMs);
+  let initResult = null;
   try {
-    const initResult = await client.initialize(signal);
+    initResult = await client.initialize(signal);
     const tools = await client.listTools(signal);
     return { ok: true, toolCount: tools.length, serverName: initResult?.serverInfo?.name ?? null };
   } catch (error) {
-    return { ok: false, ...classifyConnectionFailure(error) };
+    const failure = classifyConnectionFailure(error);
+    // Spec #26 T5: this check answers "is the token valid", not "can it see
+    // the default project". A project-access rejection proves the token
+    // authenticated — only access was refused — so it counts as accepted,
+    // with the server name from the handshake when there was one.
+    if (failure.kind === "no-project-access") {
+      return { ok: true, toolCount: null, serverName: initResult?.serverInfo?.name ?? null };
+    }
+    return { ok: false, ...failure };
   }
 }
 
